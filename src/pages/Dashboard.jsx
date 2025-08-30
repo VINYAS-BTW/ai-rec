@@ -15,6 +15,19 @@ export default function Hero() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  const [results, setResults] = useState([]);
+
+  const fetchRecommendations = async () => {
+    const res = await fetch("http://127.0.0.1:8000/recommend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: input, k: 5 }),
+    });
+    const data = await res.json();
+    setResults(data.recommendations);
+    setMessages((prev) => [...prev, { type: "ai", text: data.recommendations }]);
+  };
+
   const handleSend = () => {
     if (!input.trim()) return;
 
@@ -22,16 +35,14 @@ export default function Hero() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setLoading(true);
-
+    
+    
     // Simulate AI response after 2s
     setTimeout(() => {
-      const aiMessage = {
-        type: "ai",
-        text: `Maga, still under construction , ill recommend u once my boss activates me `,
-      };
-      setMessages((prev) => [...prev, aiMessage]);
-      setLoading(false);
+      fetchRecommendations();//Maga Api is heavy fast, so slowing it down to show animation
     }, 1500);
+    setLoading(false);
+    
   };
 
   return (
@@ -91,7 +102,11 @@ export default function Hero() {
                   <>
                     <SparklesIcon className="w-10 h-10 text-indigo-600" />
                     <div className="bg-white px-4 py-3 rounded-xl shadow w-full">
-                      <p dangerouslySetInnerHTML={{ __html: msg.text }}></p>
+                      <p>
+                        {msg.text.map((item, idx) => (
+                          <li key={idx}>{item.track_name}</li>
+                        ))}
+                      </p>
                     </div>
                   </>
                 )}
