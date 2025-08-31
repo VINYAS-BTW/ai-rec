@@ -57,7 +57,10 @@ It combines a **FastAPI backend** with **ML models** and a **React + Tailwind CS
 ai-rec/ │ ├── backend/ │ ├── main.py # FastAPI entry point │ ├── music_recommender.py # ML recommendation logic │ ├── requirements.txt # Python dependencies │ ├── src/ │ ├── assets/ # Images & static assets │ ├── components/ # React components │ ├── App.jsx # Main React app │ ├── public/ # Static public files ├── package.json # Frontend dependencies └── vite.config.js # Vite config
 
 ##SCREENSHOT
-<img width="1898" height="923" alt="image" src="https://github.com/user-attachments/assets/43d13754-04fb-432f-9d42-f7a46133455f" />
+<img width="1899" height="920" alt="image" src="https://github.com/user-attachments/assets/6112d23b-20a5-44af-86fe-3a9d6b98c4b5" />
+<img width="1550" height="926" alt="image" src="https://github.com/user-attachments/assets/713c09fd-0ec4-4959-820c-9324422b67fe" />
+
+
 
 📜 License
 This project is licensed under the MIT License.
