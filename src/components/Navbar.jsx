@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Link } from "react-router-dom";
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -48,21 +49,24 @@ export default function Navbar() {
     >
       <div className="max-w-7xl mx-auto px-6 flex items-center justify-between h-16">
         {/* Logo */}
-        <div className="text-2xl font-bold text-indigo-600 cursor-pointer">
+        <Link
+          to="/"
+          className="text-2xl font-bold text-indigo-600 cursor-pointer"
+        >
           AiRec
-        </div>
+        </Link>
 
         {/* Desktop Menu */}
         <div className="hidden md:flex space-x-8">
-          <a href="#features" className="text-gray-700 hover:text-indigo-600">
+          <Link to="/features" className="text-gray-700 hover:text-indigo-600">
             Features
-          </a>
+          </Link>
           <a href="#pricing" className="text-gray-700 hover:text-indigo-600">
             Pricing
           </a>
-          <a href="#contact" className="text-gray-700 hover:text-indigo-600">
+          <Link to="/about" className="text-gray-700 hover:text-indigo-600">
             About Us
-          </a>
+          </Link>
         </div>
 
         {/* Auth Buttons */}

@@ -14,18 +14,30 @@ export default function Hero() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
-
   const [results, setResults] = useState([]);
 
   const fetchRecommendations = async () => {
-    const res = await fetch("http://127.0.0.1:8000/recommend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: input, k: 5 }),
-    });
-    const data = await res.json();
-    setResults(data.recommendations);
-    setMessages((prev) => [...prev, { type: "ai", text: data.recommendations }]);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: input, k: 5 }),
+      });
+      const data = await res.json();
+      setResults(data.recommendations);
+      setMessages((prev) => [
+        ...prev,
+        { type: "ai", text: data.recommendations },
+      ]);
+    } catch (err) {
+      console.error("Error fetching recommendations:", err);
+      setMessages((prev) => [
+        ...prev,
+        { type: "ai", text: ["Something went wrong."] },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleSend = () => {
@@ -35,20 +47,17 @@ export default function Hero() {
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setLoading(true);
-    
-    
-    // Simulate AI response after 2s
+
+    // Delay to show animation
     setTimeout(() => {
-      fetchRecommendations();//Maga Api is heavy fast, so slowing it down to show animation
+      fetchRecommendations();
     }, 1500);
-    setLoading(false);
-    
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 text-gray-800">
+    <div className="flex flex-col h-screen bg-gradient-to-b to-violet-100 from-violet-50 text-gray-800">
       {/* Header */}
-      <div className="flex justify-between items-center px-6 py-4 bg-white shadow-md">
+      <div className="flex justify-between items-center px-6 py-4 rounded-bl-4xl rounded-br-4xl bg-white shadow-md">
         <p className="text-2xl font-bold text-indigo-600">AiRec</p>
         <UserCircleIcon className="w-10 h-10 text-indigo-600" />
       </div>
@@ -60,7 +69,7 @@ export default function Hero() {
             {/* Greeting */}
             <div className="text-center mt-10">
               <p className="text-3xl font-semibold mb-2 text-gray-700">
-                <span className="text-indigo-600">Hello User...</span>
+                <span className="text-indigo-600 ">Hello User...</span>
               </p>
               <p className="text-lg text-gray-500">How can I help you today?</p>
             </div>
@@ -69,44 +78,57 @@ export default function Hero() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mt-10 max-w-5xl w-full">
               <Card
                 icon={<SparklesIcon className="w-6 h-6 text-indigo-600" />}
-                text="Suggest beautiful places to see on an upcoming road trip"
+                text="Best Music Recommendations..."
               />
               <Card
                 icon={<LightBulbIcon className="w-6 h-6 text-indigo-600" />}
-                text="Briefly summarize this concept: urban planning"
+                text="Watch your Favourite movies by our Ai"
               />
               <Card
                 icon={
                   <ChatBubbleLeftRightIcon className="w-6 h-6 text-indigo-600" />
                 }
-                text="Brainstorm team bonding activities for our work retreat"
+                text="Tired up with same old games? Play your A games"
               />
               <Card
                 icon={<CodeBracketIcon className="w-6 h-6 text-indigo-600" />}
-                text="Improve the readability of the following code"
+                text="Want to purchase new gadgets?, We gotchu!!"
               />
             </div>
           </>
         ) : (
           <div className="w-full max-w-3xl mt-6 space-y-6">
             {messages.map((msg, index) => (
-              <div key={index} className="flex items-start gap-3">
+              <div
+                key={index}
+                className={`flex items-start gap-3 animate-fadeIn`}
+              >
                 {msg.type === "user" ? (
                   <>
-                    <UserCircleIcon className="w-10 h-10 text-indigo-600" />
-                    <p className="bg-indigo-50 px-4 py-3 rounded-xl shadow text-gray-800">
-                      {msg.text}
-                    </p>
+                    <UserCircleIcon className="w-10 h-10 text-indigo-600 flex-shrink-0" />
+                    <div className="bg-indigo-50 px-4 py-3 rounded-3xl rounded-bl-sm shadow text-gray-800 max-w-[80%]">
+                      <p className="text-sm leading-relaxed">{msg.text}</p>
+                    </div>
                   </>
                 ) : (
                   <>
-                    <SparklesIcon className="w-10 h-10 text-indigo-600" />
-                    <div className="bg-white px-4 py-3 rounded-xl shadow w-full">
-                      <p>
-                        {msg.text.map((item, idx) => (
-                          <li key={idx}>{item.track_name}</li>
-                        ))}
-                      </p>
+                    <SparklesIcon className="w-10 h-10 text-indigo-600 flex-shrink-0" />
+                    <div className="bg-white px-4 py-3 rounded-3xl rounded-tl-sm shadow w-full">
+                      {Array.isArray(msg.text) ? (
+                        <ul className="divide-y divide-gray-100">
+                          {msg.text.map((item, idx) => (
+                            <li
+                              key={idx}
+                              className="py-2 flex items-center gap-2 text-sm text-gray-700 uppercase font-semibold"
+                            >
+                              <span className="w-2 h-2 bg-indigo-500 rounded-full"></span>
+                              {item.track_name}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm leading-relaxed">{msg.text}</p>
+                      )}
                     </div>
                   </>
                 )}
@@ -114,10 +136,13 @@ export default function Hero() {
             ))}
 
             {loading && (
-              <div className="flex items-center gap-2 text-indigo-600">
-                <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce"></span>
-                <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce delay-150"></span>
-                <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce delay-300"></span>
+              <div className="flex items-start gap-3 animate-fadeIn">
+                <SparklesIcon className="w-10 h-10 text-indigo-600 flex-shrink-0" />
+                <div className="bg-white px-4 py-3 rounded-3xl rounded-tl-sm shadow flex items-center gap-2">
+                  <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce"></span>
+                  <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce delay-150"></span>
+                  <span className="w-2 h-2 bg-indigo-600 rounded-full animate-bounce delay-300"></span>
+                </div>
               </div>
             )}
           </div>
@@ -125,8 +150,8 @@ export default function Hero() {
       </div>
 
       {/* Input Bar */}
-      <div className=" p-4 shadow-lg">
-        <div className="flex items-center gap-3 max-w-4xl mx-auto bg-gray-100 rounded-full px-4 py-4 shadow-2xl border-neutral-900 border-1">
+      <div className="p-4 shadow-lg ">
+        <div className="flex items-center gap-3 max-w-4xl mx-auto bg-gray-100 rounded-full px-4 py-4 shadow-2xl  border-0">
           <input
             type="text"
             value={input}
@@ -136,10 +161,10 @@ export default function Hero() {
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
           />
           <PhotoIcon className="w-6 h-6 text-gray-500 hover:text-indigo-600 cursor-pointer" />
-          <MicrophoneIcon className="w-6 h-6 text-gray-500 hover:text-indigo-600 cursor-pointer " />
+          <MicrophoneIcon className="w-6 h-6 text-gray-500 hover:text-indigo-600 cursor-pointer" />
           <PaperAirplaneIcon
             onClick={handleSend}
-            className="w-6 h-6 text-indigo-600 cursor-pointer transform rotate-290 hover:scale-110 transition "
+            className="w-6 h-6 text-indigo-600 cursor-pointer transform rotate-290 hover:scale-110 transition"
           />
         </div>
         <p className="text-center text-xs text-gray-500 mt-2">
