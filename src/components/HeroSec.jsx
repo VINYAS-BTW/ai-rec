@@ -13,15 +13,53 @@ import gamesImg from "../assets/images/games.jpg";
 import foodImg from "../assets/images/food.jpg";
 
 const categories = [
-  { label: "Music", desc: "Personalized playlists and artist suggestions", img: musicImg },
-  { label: "Movies", desc: "Tailored film picks for your mood", img: moviesImg },
-  { label: "Books", desc: "Curated reads based on your interests", img: booksImg },
-  { label: "TV Shows", desc: "Series recommendations you'll binge", img: tvImg },
-  { label: "E-commerce", desc: "Smart product suggestions for you", img: ecommerceImg },
+  {
+    label: "Music",
+    desc: "Personalized playlists and artist suggestions",
+    img: musicImg,
+  },
+  {
+    label: "Movies",
+    desc: "Tailored film picks for your mood",
+    img: moviesImg,
+  },
+  {
+    label: "Books",
+    desc: "Curated reads based on your interests",
+    img: booksImg,
+  },
+  {
+    label: "TV Shows",
+    desc: "Series recommendations you'll binge",
+    img: tvImg,
+  },
+  {
+    label: "E-commerce",
+    desc: "Smart product suggestions for you",
+    img: ecommerceImg,
+  },
   { label: "Games", desc: "Find your next favorite game", img: gamesImg },
-  { label: "Food", desc: "Discover dishes and restaurants nearby", img: foodImg },
+  {
+    label: "Food",
+    desc: "Discover dishes and restaurants nearby",
+    img: foodImg,
+  },
 ];
 
+const containerVariants = {
+  hidden: { opacity: 0, scale: 0.9, rotate: 6 },
+  show: {
+    opacity: 1,
+    scale: 1,
+    rotate: 6,
+    transition: { duration: 0.8, ease: "easeOut", staggerChildren: 0.15 }
+  }
+};
+
+const columnVariants = {
+  hidden: { opacity: 0, y: 50 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.6, ease: "easeOut" } }
+};
 const HeroSec = () => {
   const navigate = useNavigate();
 
@@ -106,7 +144,8 @@ const HeroSec = () => {
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.8, duration: 1.4, ease: "easeOut" }}
         >
-          From everyday choices to big moves — we help you find clarity and act with confidence.
+          From everyday choices to big moves — we help you find clarity and act
+          with confidence.
         </motion.p>
 
         <motion.div
@@ -140,22 +179,35 @@ const HeroSec = () => {
         <div className="pointer-events-none absolute top-0 left-0 w-full h-32 sm:h-20 bg-gradient-to-b from-neutral-100 to-transparent z-20" />
         <div className="pointer-events-none absolute bottom-0 left-0 w-full h-32 sm:h-20 bg-gradient-to-t from-neutral-100 to-transparent z-20" />
 
-        {/* Rotated container */}
-        <div className="flex gap-3 sm:gap-4 md:gap-6 rotate-6 origin-center">
+        {/* Rotated container with motion */}
+        <motion.div
+          className="flex gap-3 sm:gap-4 md:gap-6 rotate-6 origin-center"
+          variants={containerVariants}
+          initial="hidden"
+          animate="show"
+        >
           {/* Column 1 */}
-          <div ref={col1Ref} className="flex flex-col gap-3 sm:gap-4 md:gap-6">
+          <motion.div
+            ref={col1Ref}
+            className="flex flex-col gap-3 sm:gap-4 md:gap-6"
+            variants={columnVariants}
+          >
             {[...col1Items, ...col1Items].map((item, idx) => (
               <Card key={`col1-${idx}`} item={item} />
             ))}
-          </div>
+          </motion.div>
 
           {/* Column 2 */}
-          <div ref={col2Ref} className="flex flex-col gap-3 sm:gap-4 md:gap-6">
+          <motion.div
+            ref={col2Ref}
+            className="flex flex-col gap-3 sm:gap-4 md:gap-6"
+            variants={columnVariants}
+          >
             {[...col2Items, ...col2Items].map((item, idx) => (
               <Card key={`col2-${idx}`} item={item} />
             ))}
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       </div>
     </section>
   );

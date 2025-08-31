@@ -67,6 +67,9 @@ export default function Navbar() {
           <Link to="/about" className="text-gray-700 hover:text-indigo-600">
             About Us
           </Link>
+          <Link to="/about" className="text-gray-700 hover:text-indigo-600">
+            Contact
+          </Link>
         </div>
 
         {/* Auth Buttons */}
