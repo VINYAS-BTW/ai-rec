@@ -46,7 +46,7 @@ const itemVariants = {
 
 export const Features = () => {
   return (
-    <section className="py-20 min-h-screen bg-gradient-to-b from-neutral-100 to-neutral-50 overflow-x-hidden">
+    <section className="py-20 bg-gradient-to-b from-neutral-100 to-neutral-50 overflow-x-hidden">
       <div className="max-w-7xl w-full mx-auto px-6 lg:px-8">
         <motion.div
           className="text-center mb-16"

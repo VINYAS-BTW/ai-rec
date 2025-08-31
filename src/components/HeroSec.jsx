@@ -4,37 +4,37 @@ import { useNavigate } from "react-router-dom";
 
 const categories = [
   {
-    label: " Music",
+    label: "Music",
     desc: "Personalized playlists and artist suggestions",
     img: "/images/music.jpg",
   },
   {
-    label: " Movies",
+    label: "Movies",
     desc: "Tailored film picks for your mood",
     img: "/images/movies.jpg",
   },
   {
-    label: " Books",
+    label: "Books",
     desc: "Curated reads based on your interests",
     img: "/images/books.jpg",
   },
   {
-    label: " TV Shows",
+    label: "TV Shows",
     desc: "Series recommendations you’ll binge",
     img: "/images/tv.jpg",
   },
   {
-    label: " E‑commerce",
+    label: "E-commerce",
     desc: "Smart product suggestions for you",
     img: "/images/ecommerce.jpg",
   },
   {
-    label: " Games",
+    label: "Games",
     desc: "Find your next favorite game",
     img: "/images/games.jpg",
   },
   {
-    label: " Food",
+    label: "Food",
     desc: "Discover dishes and restaurants nearby",
     img: "/images/food.jpg",
   },
@@ -42,17 +42,15 @@ const categories = [
 
 const HeroSec = () => {
   const navigate = useNavigate();
+
   return (
-    <section className="relative min-h-screen flex flex-col items-center justify-center bg-neutral-50 text-gray-900 overflow-hidden">
+    <section className="bg-grid-light .mask-fade relative bg-gradient-to-b from-neutral-50 to-neutral-100 text-gray-900 overflow-hidden min-h-screen">
       {/* Hero Content */}
-      <motion.div
-        className="text-center px-6 max-w-4xl"
-        initial={{ opacity: 0, y: 40 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 1, ease: "easeOut" }}
-      >
+       <div className="absolute inset-0 bg-grid-light mask-fade"></div>
+      <div className="relative z-20 flex flex-col items-center text-center px-6 pt-40 md:pt-44 pb-40">
+        
         <motion.h1
-          className="text-4xl md:text-6xl  font-extrabold leading-tight"
+          className="text-4xl md:text-6xl font-extrabold leading-tight"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2, duration: 0.8 }}
@@ -61,7 +59,7 @@ const HeroSec = () => {
         </motion.h1>
 
         <motion.p
-          className="mt-6 text-lg md:text-xl text-gray-600"
+          className="mt-6 text-lg md:text-xl text-gray-600 max-w-2xl"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4, duration: 0.8 }}
@@ -70,6 +68,7 @@ const HeroSec = () => {
           with confidence.
         </motion.p>
 
+        {/* CTA Buttons */}
         <motion.div
           className="mt-8 flex flex-col sm:flex-row gap-4 justify-center"
           initial={{ opacity: 0, y: 20 }}
@@ -86,24 +85,28 @@ const HeroSec = () => {
             Learn More
           </button>
         </motion.div>
-      </motion.div>
+      </div>
 
-      {/* Drifting Cards with Fade Edges */}
-      <div className="absolute bottom-10 w-full overflow-hidden">
-        {/* Left fade */}
-        <div className="pointer-events-none absolute left-0 top-0 h-full w-40 md:w-80 bg-gradient-to-r from-neutral-50 to-transparent z-10" />
-        {/* Right fade */}
-        <div className="pointer-events-none absolute right-0 top-0 h-full w-40 md:w-80  bg-gradient-to-l from-neutral-50 to-transparent z-10" />
+      {/* Floating Marquee Cards */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.6, duration: 0.8 }}
+        className="absolute bottom-0 w-full overflow-hidden py-8"
+      >
+        {/* Fades */}
+        <div className="pointer-events-none absolute left-0 top-0 h-full w-24 bg-gradient-to-r from-neutral-50 to-transparent z-10" />
+        <div className="pointer-events-none absolute right-0 top-0 h-full w-24 bg-gradient-to-l from-neutral-50 to-transparent z-10" />
 
         <motion.div
-          className="flex gap-8 px-8 mb-1 "
-          animate={{ x: ["0%", "-10%", "0%"] }}
-          transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
+          className="flex gap-6 px-6"
+          animate={{ x: ["0%", "-25%"] }}
+          transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
         >
           {[...categories, ...categories].map((item, idx) => (
             <motion.div
               key={idx}
-              className="flex-shrink-0 min-w-[240px] h-[200px] bg-white rounded-2xl shadow-lg border border-gray-200 flex flex-col items-center text-center p-4 cursor-pointer"
+              className="flex-shrink-0 w-[200px] sm:w-[240px] h-[180px] bg-white rounded-2xl shadow-md border border-gray-200 flex flex-col items-center text-center p-4 cursor-pointer"
               whileHover={{
                 scale: 1.05,
                 boxShadow: "0 10px 25px rgba(0,0,0,0.15)",
@@ -115,14 +118,14 @@ const HeroSec = () => {
                 alt={item.label}
                 className="w-full h-24 object-cover rounded-lg mb-3"
               />
-              <div className="text-lg font-semibold text-gray-800">
+              <div className="text-base font-semibold text-gray-800">
                 {item.label}
               </div>
-              <p className="text-sm text-gray-500 mt-1">{item.desc}</p>
+              <p className="text-xs text-gray-500 mt-1">{item.desc}</p>
             </motion.div>
           ))}
         </motion.div>
-      </div>
+      </motion.div>
     </section>
   );
 };
