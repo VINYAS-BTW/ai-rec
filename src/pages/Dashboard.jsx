@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Send as SendIcon,
   Mic as MicIcon,
@@ -11,12 +11,29 @@ import {
   SportsEsports as SportsEsportsIcon,
   ShoppingCart as ShoppingCartIcon,
   Restaurant as RestaurantIcon,
+  Menu as MenuIcon,
+  Close as CloseIcon,
 } from "@mui/icons-material";
+// ...existing code...
 
 export default function Hero() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // sidebar state. initialize open on mount for desktop but allow user toggles
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 768 : true
+  );
+
+  // set initial state only (don't overwrite user toggles on resize)
+  useEffect(() => {
+    // if window size changed between render and mount, ensure reasonable default
+    if (typeof window !== "undefined") {
+      setSidebarOpen(window.innerWidth >= 768);
+    }
+    // no resize listener — let user toggle freely
+  }, []);
 
   const fetchRecommendations = async () => {
     try {
@@ -67,16 +84,30 @@ export default function Hero() {
     // handleSend();
   };
 
+  // removed animated background (gsap + framer-motion) per request
   return (
-    
-    <div className="flex flex-col h-screen bg-gradient-to-b from-white to-gray-50 text-gray-800">
+    <div className="flex flex-col h-screen bg-gradient-to-b from-white to-gray-50 text-gray-800 relative">
+      {/* Top accent (static) */}
+
       {/* Header */}
-      <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-blue-600/10 flex items-center justify-center">
-              <AutoAwesomeIcon sx={{ fontSize: 22, color: "#2563eb" }} />
-            </div>
+            {/* Header sidebar toggle (moved to left) */}
+            <button
+              onClick={() => setSidebarOpen((s) => !s)}
+              className="inline-flex items-center justify-center h-9 w-9 rounded-full bg-white border border-gray-200 text-sm text-gray-700 shadow-sm hover:bg-gray-50"
+              aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+              title={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+            >
+              {sidebarOpen ? (
+                <CloseIcon sx={{ fontSize: 18, color: "#374151" }} />
+              ) : (
+                <MenuIcon sx={{ fontSize: 18, color: "#374151" }} />
+              )}
+            </button>
+
+           
             <div>
               <p className="text-2xl font-extrabold bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent leading-none">
                 AiRec
@@ -86,29 +117,119 @@ export default function Hero() {
               </p>
             </div>
           </div>
-          <AccountCircleIcon sx={{ fontSize: 40, color: "#2563eb" }} />
+          <div className="flex items-center gap-3">
+            {/* Persistent header sidebar toggle */}
+            
+
+            {/* New chat button */}
+            <button
+              onClick={() => {
+                setMessages([]);
+                setInput("");
+                // on mobile close the sidebar so new chat is visible
+                if (typeof window !== "undefined" && window.innerWidth < 768) {
+                  setSidebarOpen(false);
+                }
+              }}
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-3xl bg-white border border-gray-200 text-sm text-gray-700 shadow-sm hover:shadow-md   cursor-pointer"
+              title="New chat"
+            >
+              <span className="font-medium">New chat</span>
+            </button>
+
+            <AccountCircleIcon sx={{ fontSize: 40, color: "#2563eb" }} />
+          </div>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-4 md:px-6 py-6 md:py-8">
-          {messages.length === 0 ? (
-            <EmptyState onSuggest={suggest} />
-          ) : (
-            <div className="space-y-6">
-              {messages.map((msg, index) => (
-                <Message key={index} msg={msg} />
-              ))}
+      {/* Content area: sidebar + main */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Overlay when mobile open */}
+        {sidebarOpen && (
+          <div
+            className="md:hidden fixed inset-0 z-20 bg-black/30"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
 
-              {loading && <TypingBubble />}
+        <aside
+          aria-hidden={!sidebarOpen}
+          className={`
+            fixed md:static left-0 top-0 z-30 h-full md:h-auto
+            w-72 md:w-72 transform transition-transform duration-300
+            bg-white/95 backdrop-blur border-r border-gray-100 shadow-sm
+            ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}
+            md:flex md:flex-col md:gap-4 md:p-4
+          `}
+        >
+          <div className="hidden md:flex items-center gap-3 mb-3 relative">
+            <div className="h-9 w-9 rounded-xl bg-blue-600/10 flex items-center justify-center">
+              <AutoAwesomeIcon sx={{ fontSize: 20, color: "#2563eb" }} />
             </div>
-          )}
-        </div>
-      </main>
+            <div>
+              <p className="text-lg font-semibold">Explore</p>
+              <p className="text-xs text-gray-500 -mt-0.5">Quick access</p>
+            </div>
+            {/* sidebar header toggle removed - use header toggle on the left */}
+          </div>
+
+          <nav className="px-3 md:px-0 py-3 md:py-0 space-y-2 md:flex-1 overflow-auto">
+            <SidebarItem
+              icon={<AutoAwesomeIcon sx={{ fontSize: 18 }} />}
+              label="Discover"
+              active
+            />
+            <SidebarItem
+              icon={<MusicNoteIcon sx={{ fontSize: 18 }} />}
+              label="Music"
+            />
+            <SidebarItem
+              icon={<MovieIcon sx={{ fontSize: 18 }} />}
+              label="Movies"
+            />
+            <SidebarItem
+              icon={<MenuBookIcon sx={{ fontSize: 18 }} />}
+              label="Books"
+            />
+            <SidebarItem
+              icon={<SportsEsportsIcon sx={{ fontSize: 18 }} />}
+              label="Games"
+            />
+            <SidebarItem
+              icon={<ShoppingCartIcon sx={{ fontSize: 18 }} />}
+              label="Shopping"
+            />
+            <SidebarItem
+              icon={<RestaurantIcon sx={{ fontSize: 18 }} />}
+              label="Food"
+            />
+          </nav>
+        </aside>
+
+        {/* Main area */}
+        <main
+          className={`flex-1 overflow-auto ${
+            sidebarOpen ? "md:ml-72" : "md:ml-0"
+          }`}
+        >
+          <div className="max-w-5xl mx-auto px-4 md:px-6 py-6 md:py-8">
+            {messages.length === 0 ? (
+              <EmptyState onSuggest={suggest} />
+            ) : (
+              <div className="space-y-6">
+                {messages.map((msg, index) => (
+                  <Message key={index} msg={msg} />
+                ))}
+
+                {loading && <TypingBubble />}
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
 
       {/* Composer */}
-      <footer className="sticky bottom-0 backdrop-blur">
+      <footer className="sticky bottom-0 backdrop-blur ">
         <div className="max-w-5xl mx-auto px-4 md:px-6 py-3">
           <div
             className="
@@ -194,6 +315,7 @@ export default function Hero() {
     </div>
   );
 }
+// ...existing code...
 
 /* ——— Components ——— */
 
@@ -227,41 +349,40 @@ function EmptyState({ onSuggest }) {
 
   return (
     <div className="text-center">
-  <h1 className="text-3xl font-semibold mb-2">
-    <span className="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
-      Hello User!
-    </span>
-  </h1>
-  <p className="text-base md:text-lg text-gray-500">
-    Tell me what you're into — I'll tailor recommendations instantly.
-  </p>
+      <h1 className="text-3xl font-semibold mb-2">
+        <span className="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent">
+          Hello User!
+        </span>
+      </h1>
+      <p className="text-base md:text-lg text-gray-500">
+        Tell me what you're into — I'll tailor recommendations instantly.
+      </p>
 
-  <div
-    className="
+      <div
+        className="
       grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4
       auto-rows-[150px] gap-4 mt-8 max-w-5xl mx-auto
     "
-  >
-    {suggestions.map((s, i) => (
-      <BentoCard
-        key={i}
-        icon={s.icon}
-        text={s.label}
-        onClick={() => onSuggest(s.label)}
-        className={
-          i === 0
-            ? "lg:col-span-2 lg:row-span-3"
-            : i === 2
-            ? "lg:row-span-2"
-            : i === 5
-            ? "lg:col-span-1"
-            : ""
-        }
-      />
-    ))}
-  </div>
-</div>
-
+      >
+        {suggestions.map((s, i) => (
+          <BentoCard
+            key={i}
+            icon={s.icon}
+            text={s.label}
+            onClick={() => onSuggest(s.label)}
+            className={
+              i === 0
+                ? "lg:col-span-2 lg:row-span-3"
+                : i === 2
+                ? "lg:row-span-2"
+                : i === 5
+                ? "lg:col-span-1"
+                : ""
+            }
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 function BentoCard({ icon, text, onClick, className = "" }) {
@@ -278,18 +399,21 @@ function BentoCard({ icon, text, onClick, className = "" }) {
     <div
       onClick={onClick}
       onMouseMove={handleMouseMove}
+      tabIndex={0}
       className={`
         relative overflow-hidden rounded-4xl cursor-pointer
         bg-gray-50 border border-gray-200 shadow-sm
-        hover:shadow-lg transition-all duration-300
+        transform transition-all duration-300 will-change-transform
+        hover:-translate-y-1 hover:scale-[1.01] hover:shadow-lg
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-100
         flex flex-col justify-between p-4 group ${className}
       `}
     >
       {/* Hover gradient that follows cursor */}
       <div
-        className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+        className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none blur-[2px]"
         style={{
-          background: `radial-gradient(circle at ${pos.x}% ${pos.y}%, rgba(59,130,246,0.15), transparent 60%)`,
+          background: `radial-gradient(circle at ${pos.x}% ${pos.y}%, rgba(59,130,246,0.20), transparent 55%)`,
         }}
       />
 
@@ -311,6 +435,34 @@ function QuickPromptChip({ icon, text, onClick }) {
       <span className="text-sm text-gray-700 group-hover:text-gray-900">
         {text}
       </span>
+    </button>
+  );
+}
+
+// new: SidebarItem component used by the sidebar
+function SidebarItem({ icon, label, active = false, sidebarOpen = true }) {
+  return (
+    <button
+      className={`relative w-full flex items-center gap-3 transition-all duration-200 rounded-lg overflow-hidden ${
+        active
+          ? "bg-gradient-to-r from-blue-600/10 to-indigo-50 border border-blue-100 text-blue-700 shadow-sm"
+          : "hover:bg-gray-50 text-gray-700"
+      } ${
+        sidebarOpen ? "px-3 py-2 justify-start" : "px-2 py-2 justify-center"
+      }`}
+    >
+      {/* active left accent */}
+      {active && (
+        <span
+          className={`absolute left-0 top-0 h-full rounded-tr-lg rounded-br-lg ${
+            sidebarOpen ? "w-1" : "w-1"
+          }`}
+          style={{ background: "linear-gradient(180deg,#2563eb,#7c3aed)" }}
+        />
+      )}
+
+      <span className="text-blue-600 z-10">{icon}</span>
+      {sidebarOpen && <span className="text-sm font-medium z-10">{label}</span>}
     </button>
   );
 }
@@ -379,7 +531,9 @@ function AIResultBlock({ category, items }) {
   const hasCards = Array.isArray(items) && items.length > 0;
 
   if (!hasCards) {
-    return <p className="px-4 py-3 text-sm text-gray-600"> 😢 No results found.</p>;
+    return (
+      <p className="px-4 py-3 text-sm text-gray-600"> 😢 No results found.</p>
+    );
   }
 
   return (
