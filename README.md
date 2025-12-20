@@ -1,6 +1,6 @@
 #  AI-Rec — Intelligent Multi-Domain Recommendation System
 
-START OF PROJECT - 24 AUG 2025
+START OF PROJECT - 24 AUG 2025..
 
 [![Made with React](https://img.shields.io/badge/Frontend-React-blue?logo=react)](https://react.dev/)
 [![Made with FastAPI](https://img.shields.io/badge/Backend-FastAPI-green?logo=fastapi)](https://fastapi.tiangolo.com/)
