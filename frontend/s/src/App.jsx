@@ -6,6 +6,7 @@ import RefreshHandler from "./components/RefreshHandler";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Home from "./pages/Home";
+import OAuthSuccess from "./pages/OauthSuccess";
 import AppShell from "./AppShell";
 import { ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -19,6 +20,8 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/oauth-success" element={<OAuthSuccess />} />
+
           <Route
             path="/app"
             element={

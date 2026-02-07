@@ -8,6 +8,13 @@ const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+await db.execute(`
+  ALTER TABLE auth.users
+  ALTER COLUMN password DROP NOT NULL;
+`);
+
+
+
 
 export async function connectDB() {
   try {

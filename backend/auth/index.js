@@ -5,6 +5,7 @@ import bodyParser from "body-parser";
 import { connectDB } from "./db/index.js";
 import AuthRoute from "./routes/AuthRoute.js";
 
+
 await connectDB();
 
 const app = express();
