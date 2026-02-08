@@ -928,7 +928,7 @@ function RecommenderPanel() {
                                 animate={{ scale: 1 }}
                                 transition={{ type: "spring", duration: 0.6 }}
                               >
-                                <Award className="w-6 h-6 text-emerald-600" />
+                                
                               </motion.div>
                               <h3 className="text-xl font-bold text-gray-900 font-main">
                                 Top Recommendations
@@ -950,14 +950,14 @@ function RecommenderPanel() {
                                     initial={{ opacity: 0, x: -20 }}
                                     animate={{ opacity: 1, x: 0 }}
                                     transition={{ delay: index * 0.05, duration: 0.3 }}
-                                    whileHover={{ scale: 1.02, x: 4 }}
-                                    className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-emerald-300 transition-all duration-300 shadow-sm hover:shadow-md"
+                                    whileHover={{ scale: 1.00, x: 0 }}
+                                    className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
                                   >
                                     <div className="flex items-center space-x-4">
                                       <motion.div
-                                        whileHover={{ rotate: 360 }}
+                                        whileHover={{ rotate: 0 }}
                                         transition={{ duration: 0.6 }}
-                                        className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0"
+                                        className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0"
                                       >
                                         {index + 1}
                                       </motion.div>

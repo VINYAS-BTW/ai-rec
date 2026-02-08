@@ -7,7 +7,6 @@ load_dotenv()
 import uuid
 import json
 import asyncio
-import mlflow
 import pickle
 import numpy as np
 import tempfile
@@ -23,6 +22,29 @@ import models
 import schemas
 import database
 import httpx
+# --- MLflow path-only URI fix: patch registry before mlflow is used so all callers get the wrapper ---
+_BACK2_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _path_to_file_uri(path: str) -> str:
+    path = os.path.abspath(path)
+    if os.name == "nt":
+        path = path.replace("\\", "/")
+        return "file:///" + path if path[0] != "/" else "file://" + path
+    return "file://" + path
+
+
+def _ensure_file_uri(uri: str) -> str:
+    if "://" in uri or uri.startswith("runs:") or uri.startswith("models:"):
+        return uri
+    path = os.path.normpath(uri)
+    if os.name == "nt":
+        path = path.replace("\\", "/")
+        return "file:///" + path if path and path[0] != "/" else "file://" + path
+    return "file://" + path
+
+
+import mlflow
 # --- Import your classes ---
 from Content import ContentBasedRecommender
 from Collaborative import CollaborativeFilteringRecommender
@@ -58,34 +80,13 @@ async def notify_webhooks(event_type: str, payload: dict):
                     print(f"❌ Failed to send to {app['app_name']}: {e}")
     except Exception as e:
         print(f"❌ notify_webhooks failed: {e}")
-# --- App Setup & MLflow Configuration (Unchanged) ---
-os.makedirs("user_uploads", exist_ok=True)
-os.makedirs("mlflow_artifacts", exist_ok=True)
-
-MLFLOW_TRACKING_URI = "file:./mlruns"
-MLFLOW_ARTIFACT_LOCATION = os.getenv("MLFLOW_ARTIFACT_LOCATION", "./mlflow_artifacts")
-os.environ["MLFLOW_TRACKING_URI"] = MLFLOW_TRACKING_URI
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-
-# try:
-#     mlflow.create_experiment("recommender_projects", artifact_location=MLFLOW_ARTIFACT_LOCATION)
-# except mlflow.exceptions.RestException:
-#     pass 
-# mlflow.set_experiment("recommender_projects")
-# --- CONFIGURE MLFLOW ---
-# ... (other lines) ...
-
-# Check if the experiment already exists
-experiment = mlflow.get_experiment_by_name("recommender_projects")
-
-# If it doesn't exist, create it
-if not experiment:
-    print("Creating new MLflow experiment: recommender_projects")
-    mlflow.create_experiment("recommender_projects", artifact_location=MLFLOW_ARTIFACT_LOCATION)
-
-# Set the experiment as the active one for all runs
-mlflow.set_experiment("recommender_projects")
-# --- END MLFLOW CONFIG ---
+# --- App Setup & Model Storage ---
+USER_UPLOADS_DIR = os.path.join(_BACK2_DIR, "user_uploads")
+os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
+# Save models to a local directory (avoids MLflow artifact store and Windows path issues).
+PROJECT_MODELS_DIR = os.path.join(_BACK2_DIR, "project_models")
+os.makedirs(PROJECT_MODELS_DIR, exist_ok=True)
+# --- END CONFIG ---
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -170,7 +171,7 @@ async def save_file_and_schema(
 ) -> models.UploadedFile:
     
     storage_filename = f"{uuid.uuid4()}_{file.filename}"
-    storage_path = os.path.join("user_uploads", storage_filename)
+    storage_path = os.path.join(USER_UPLOADS_DIR, storage_filename)
     
     async with aiofiles.open(storage_path, 'wb') as out_file:
         content = await file.read()
@@ -319,32 +320,21 @@ async def process_project(project_id: int, db: Session):
                  print(f"[Task {project_id}]: Saved Content data for Collaborative title lookups.")
 
 
-            with mlflow.start_run() as run:
-                print(f"[Task {project_id}]: MLflow run started: {run.info.run_id}")
-                mlflow.log_param("model_type", model_type)
-                
-                model_name = f"project-{project_id}-recommender"
-                artifact_path = "recommender_model" # This is the name of the artifact folder *inside* the run
-                
-                # Use log_model to save AND log the model as an artifact
-                model_info = mlflow.pyfunc.log_model(
-                    artifact_path=artifact_path,
-                    python_model=MLflowRecommenderWrapper(),
-                    artifacts=artifacts,
-                    code_paths=["dynamic_recommender.py", "Content.py", "Collaborative.py", "Hybrid.py"]
-                )
-                
-                # Register the model using the valid URI returned by log_model
-                registered_model = mlflow.register_model(
-                    model_uri=model_info.model_uri, # model_info.model_uri is the correct 'runs:/...' path
-                    name=model_name
-                )
-                model_version = registered_model.version
-                print(f"[Task {project_id}]: Model registered as '{model_name}' v{model_version}")
+            model_name = f"project-{project_id}-recommender"
+            # Save model to local directory (avoids MLflow artifact store / Windows path issues).
+            saved_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
+            os.makedirs(saved_model_path, exist_ok=True)
+            mlflow.pyfunc.save_model(
+                path=saved_model_path,
+                python_model=MLflowRecommenderWrapper(),
+                artifacts=artifacts,
+                code_paths=["dynamic_recommender.py", "Content.py", "Collaborative.py", "Hybrid.py"],
+            )
+            print(f"[Task {project_id}]: Model saved to {saved_model_path}")
 
-        # --- Update Project in DB (Unchanged) ---
+        # --- Update Project in DB ---
         db_project.mlflow_model_name = model_name
-        db_project.mlflow_model_version = model_version
+        db_project.mlflow_model_version = 1  # Local model version (not from registry)
         db_project.status = models.ProjectStatus.READY
         db.commit()
         print(f"[Task {project_id}]: Processing complete.")
@@ -541,12 +531,15 @@ def get_recommendations(
         raise HTTPException(status_code=400, detail="user_id and item_title are required for this hybrid model.")
 
     try:
-        model_uri = f"models:/{db_project.mlflow_model_name}/{db_project.mlflow_model_version}"
-        print(f"Loading model from URI: {model_uri}")
-        print(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+        # Load from local project_models directory (file URI for Windows compatibility).
+        local_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
+        if not os.path.isdir(local_model_path):
+            raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
+        model_uri = _path_to_file_uri(local_model_path)
+        print(f"Loading model from: {local_model_path}")
         print(f"Project details: {db_project.project_name} (ID: {db_project.id})")
         print(f"Model type: {model_type}, User ID: {user_id}, Item title: {item_title}")
-        
+
         model = mlflow.pyfunc.load_model(model_uri)
         print("Model loaded successfully")
         
