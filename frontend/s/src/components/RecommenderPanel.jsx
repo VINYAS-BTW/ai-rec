@@ -930,8 +930,8 @@ function RecommenderPanel() {
                               >
                                 
                               </motion.div>
-                              <h3 className="text-xl font-bold text-gray-900 font-main">
-                                Top Recommendations
+                              <h3 className="text-2xl font-bold text-gray-900 font-main">
+                                Top Recommendations  <h2 className="text-sm  text-gray-400 font-third"> Based on your input</h2>
                               </h3>
                             </div>
                             <div className="space-y-3">
@@ -951,13 +951,13 @@ function RecommenderPanel() {
                                     animate={{ opacity: 1, x: 0 }}
                                     transition={{ delay: index * 0.05, duration: 0.3 }}
                                     whileHover={{ scale: 1.00, x: 0 }}
-                                    className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
+                                    className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200  transition-all duration-300 shadow-sm hover:shadow-md"
                                   >
                                     <div className="flex items-center space-x-4">
                                       <motion.div
                                         whileHover={{ rotate: 0 }}
                                         transition={{ duration: 0.6 }}
-                                        className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0"
+                                        className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-rose-600 rounded-3xl flex items-center justify-center text-white font-bold font-third text-sm shadow-lg flex-shrink-0"
                                       >
                                         {index + 1}
                                       </motion.div>
@@ -966,6 +966,8 @@ function RecommenderPanel() {
                                           ? rec[titleKey]
                                           : `ID: ${rec[idKey]}`}
                                       </p>
+                                      <div className="absolute bottom-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-rose-400 via-cyan-100 to-rose-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-left"></div>
+    <div className="absolute top-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-cyan-400 via-cyan-100 to-cyan-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
                                     </div>
                                   </motion.div>
                                 );
