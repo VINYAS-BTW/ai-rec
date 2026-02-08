@@ -37,7 +37,8 @@ class ContentBasedRecommender:
         df['soup'] = df[content_feature_columns].fillna('').astype(str).agg(' '.join, axis=1)
 
         # Use TF-IDF to convert the text soup into a matrix of feature vectors
-        tfidf = TfidfVectorizer(stop_words='english')
+        # max_features limits vocabulary size for large corpora and speeds up training
+        tfidf = TfidfVectorizer(stop_words='english', max_features=10000, sublinear_tf=True)
         tfidf_matrix = tfidf.fit_transform(df['soup'])
 
         # Calculate the cosine similarity between all items
@@ -73,3 +74,20 @@ class ContentBasedRecommender:
 
         # Return the top n most similar item IDs
         return self.df[self.schema_map['item_id']].iloc[item_indices].tolist()
+
+    def recommend_with_scores(self, item_title_or_id, n=10):
+        """
+        Returns top n similar items with similarity scores for hybrid fusion.
+        item_title_or_id: lookup key (schema uses item_title in indices).
+        Returns: list of dicts [{"item_id": str, "score": float}, ...]
+        """
+        if item_title_or_id not in self.indices:
+            return []
+        idx = self.indices[item_title_or_id]
+        sim_scores = list(enumerate(self.cosine_sim[idx]))
+        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1 : n + 1]
+        id_col = self.schema_map['item_id']
+        return [
+            {"item_id": str(self.df[id_col].iloc[i]), "score": float(s)}
+            for i, s in sim_scores
+        ]

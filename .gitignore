@@ -39,9 +39,11 @@ __pycache__/
 *.egg-info/
 .eggs/
 
-# SQLite / local DB (project uses PostgreSQL)
+# Local DB files (project uses PostgreSQL/Neon only)
 *.db
 
 # MLflow / uploads (local artifacts)
 mlflow_artifacts/
 backend/back2/user_uploads/
+backend/back2/project_models/*
+backend/back2/__pycache__/*

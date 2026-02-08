@@ -51,3 +51,22 @@ class ProjectItemResponse(BaseModel):
 
 class ProjectUserResponse(BaseModel):
     id: str
+
+
+class ContextOptionColumn(BaseModel):
+    name: str
+    values: List[str] = []
+    column_type: Optional[str] = None  # "numeric" | "categorical"
+    numeric_range: Optional[Dict[str, float]] = None  # {"min": float, "max": float} for numeric columns
+
+
+class ContextOptionsResponse(BaseModel):
+    target_column: str
+    feature_columns: List[ContextOptionColumn]
+    target_values: Optional[List[str]] = None  # distinct values of target (e.g. movie/car titles) for "recommend based on this item"
+
+
+class TargetValuesResponse(BaseModel):
+    """Values of the column the model recommends — for 'similar to' dropdown (content, parameter_driven, hybrid)."""
+    target_column: str
+    target_values: List[str]

@@ -1,6 +1,6 @@
 # AiREC-BaaS
 
-A full-stack **recommendation platform** with ML models (content-based, collaborative, hybrid), webhook notifications, and auth. Upload datasets, train models, register external apps with API keys, and get recommendations via the web UI or REST API.
+A full-stack **recommendation platform (backend-as-a-service)** with ML models (parameter-driven, content-based, collaborative, hybrid), webhook notifications, and auth. **Dataset-agnostic:** upload any CSV from any domain, choose what to recommend and which columns to use; the system works the same for cars, products, movies, or any other tabular data. Train models, register apps with API keys, and get recommendations via the web UI or REST API.
 
 **System design:** See **[ARCHITECTURE.md](ARCHITECTURE.md)** for flows, services, database schemas, and data flow.
 
@@ -72,6 +72,19 @@ VITE_AUTH_API_URL=http://localhost:8080
 ```
 
 Defaults in code: Auth `http://localhost:8080`, ML `http://localhost:8000`, Webhooks `http://localhost:3001`.
+
+### Neon connection checklist (if you get "could not translate host name" / ENOTFOUND)
+
+- **`.env` location:** Each service loads `.env` from its own folder. Ensure:
+  - `backend/back2/.env` for the ML API
+  - `backend/auth/.env` for auth
+  - `backend/webhooks_services/.env` for webhooks  
+  You can start the server from any directory; the correct `.env` is used.
+- **URL format:** One line, no line breaks; avoid trailing spaces or Windows CRLF (the app trims the value; if problems persist, save `.env` with LF line endings). If the password has special characters, URL-encode them or wrap the value in quotes in `.env`.
+- **Test connection:** From a backend folder (e.g. `backend/auth`), run `node ../../scripts/test-db-connection.mjs` to verify `DATABASE_URL` is loaded and see the exact error (masked URL and ENOTFOUND hint).
+- **Neon dashboard:** Copy the connection string from the Neon project (Connection string). Prefer the **pooler** (e.g. `*-pooler.*.neon.tech`) for serverless; if your network blocks it, try the **direct** connection string.
+- **DNS/network:** From the same machine where the app runs, check that the host resolves:  
+  `ping ep-xxxx-pooler.region.aws.neon.tech` (use your actual host from the URL). If this fails, the issue is network/DNS/firewall (e.g. corporate VPN, different DNS).
 
 ---
 
@@ -175,7 +188,10 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
 
 1. Open **http://localhost:5173**.
 2. **Sign up** or **log in** (auth on port 8080).
-3. **Recommender Studio:** Create a project, upload content and/or interaction CSVs from `example_datasets/`, map columns (item_id, item_title, at least one feature column for content), choose model type (content / collaborative / hybrid). Wait until status is **Ready**, then get recommendations (by item title and/or user id). You can delete a project from the project list.
+3. **Recommender Studio:** Create a project.  
+   - **Single dataset (any CSV):** Choose “Single dataset – recommend any column by others”. Upload any CSV, set the **target** column (what to recommend) and **feature** columns (what to base recommendations on). Works for any domain.  
+   - **Content + Interaction:** Upload content and/or interaction CSVs, map columns (item_id, item_title, features for content; user_id, item_id, rating for interactions). Model types: content / collaborative / hybrid.  
+   Wait until status is **Ready**, then get recommendations (for single-dataset projects: set context from dropdowns; for content/collab/hybrid: by item title and/or user id). You can delete a project from the project list.
 4. **Webhook Dashboard:** Register an app (name + webhook URL). Copy the **API key** for the external client or API calls.
 5. **Recommendations API** (with API key):  
    `POST http://localhost:3001/api/recommend`  

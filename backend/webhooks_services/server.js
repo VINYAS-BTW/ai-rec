@@ -41,6 +41,8 @@ ready
     if (err.code) console.error("Code:", err.code);
     if (!process.env.DATABASE_URL) {
       console.error("DATABASE_URL is not set. Create backend/webhooks_services/.env with DATABASE_URL=postgresql://...");
+    } else if (err.code === "ENOTFOUND" || err.message.includes("getaddrinfo")) {
+      console.error("Database host could not be resolved. Check network and that Neon/PostgreSQL is reachable.");
     }
     process.exit(1);
   });

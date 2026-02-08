@@ -23,6 +23,7 @@ import {
   Target,
   Award,
   Clock,
+  RotateCw,
 } from "lucide-react";
 import { API_BACKEND, getBackendAuthHeaders } from "../api";
 import { useAuth } from "../context/AuthContext";
@@ -47,6 +48,66 @@ const Select = (props) => (
     <ChevronDown className="absolute right-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
   </div>
 );
+
+/** Searchable dropdown for many options: type to filter, scroll to browse, click to select. */
+const SearchableSelect = ({ value, onChange, options, placeholder = "Any", id }) => {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const containerRef = useRef(null);
+  const filtered = useMemo(() => {
+    const f = (filter || "").trim().toLowerCase();
+    if (!f) return options;
+    return options.filter((o) => String(o).toLowerCase().includes(f));
+  }, [options, filter]);
+  useEffect(() => {
+    const h = (e) => { if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false); };
+    if (open) document.addEventListener("click", h);
+    return () => document.removeEventListener("click", h);
+  }, [open]);
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        id={id}
+        onClick={() => setOpen((o) => !o)}
+        className="w-full px-4 py-3 border-2 border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 bg-white text-left text-sm font-third hover:border-slate-300 flex items-center justify-between"
+      >
+        <span className="truncate">{value || placeholder}</span>
+        <ChevronDown className={`w-5 h-5 text-gray-400 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-full bg-white border-2 border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Type to filter..."
+            className="w-full px-3 py-2 border-b border-slate-200 text-sm font-third focus:outline-none focus:ring-0"
+          />
+          <div className="max-h-48 overflow-y-auto">
+            <button
+              type="button"
+              onClick={() => { onChange(""); setOpen(false); setFilter(""); }}
+              className="w-full px-3 py-2 text-left text-sm text-slate-500 hover:bg-slate-100 font-third"
+            >
+              {placeholder}
+            </button>
+            {filtered.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => { onChange(opt); setOpen(false); setFilter(""); }}
+                className={`w-full px-3 py-2 text-left text-sm font-third hover:bg-cyan-50 ${value === opt ? "bg-cyan-50 text-cyan-800" : ""}`}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const Button = ({ children, variant = "primary", icon: Icon, ...props }) => {
   const variants = {
@@ -94,10 +155,12 @@ const SchemaMapper = ({ title, headers, schema, onChange, schemaKeys }) => (
     transition={{ duration: 0.4 }}
     className="mt-6 p-6 bg-gradient-to-br from-slate-50 via-white to-cyan-50/30 border-2 border-slate-200 rounded-2xl"
   >
-    <h3 className="font-bold text-slate-900 mb-5 flex items-center font-third text-sm">
-      <Sparkles className="w-4 h-4 mr-2 text-cyan-600" />
-      {title}
-    </h3>
+    {title ? (
+      <h3 className="font-bold text-slate-900 mb-5 flex items-center font-third text-sm">
+        <Sparkles className="w-4 h-4 mr-2 text-cyan-600" />
+        {title}
+      </h3>
+    ) : null}
     <div className="space-y-4">
       {schemaKeys.map(({ key, label, multi }) => (
         <div key={key}>
@@ -138,6 +201,7 @@ function RecommenderPanel() {
   const { logout } = useAuth();
 
   const [projectName, setProjectName] = useState("");
+  const [projectMode, setProjectMode] = useState("parameter_driven"); // "parameter_driven" | "content_interaction"
   const [contentFile, setContentFile] = useState(null);
   const [interactionFile, setInteractionFile] = useState(null);
 
@@ -147,7 +211,12 @@ function RecommenderPanel() {
   const [contentSchema, setContentSchema] = useState({
     item_id: "",
     item_title: "",
+    target_column: "",
     feature_cols: [],
+  });
+  const [parameterDrivenSchema, setParameterDrivenSchema] = useState({
+    target_column: "",
+    feature_cols: [], // optional; backend uses all other columns if empty
   });
   const [interactionSchema, setInteractionSchema] = useState({
     user_id: "",
@@ -162,12 +231,19 @@ function RecommenderPanel() {
 
   const [itemsList, setItemsList] = useState([]);
   const [usersList, setUsersList] = useState([]);
+  const [contextOptions, setContextOptions] = useState(null);
+  const [contextSelections, setContextSelections] = useState({});
+  const [selectedCriteria, setSelectedCriteria] = useState([]); // which feature columns to use for this request
   const [selectedItemTitle, setSelectedItemTitle] = useState("");
   const [selectedUserId, setSelectedUserId] = useState("");
+  const [selectedItemForSimilar, setSelectedItemForSimilar] = useState(""); // "recommend similar to this item" for parameter_driven / hybrid
   const [recommendations, setRecommendations] = useState(null);
   const [isLoadingRecs, setIsLoadingRecs] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingContextOptions, setLoadingContextOptions] = useState(false);
+  const [targetValuesData, setTargetValuesData] = useState(null); // { target_column, target_values } from /target-values for "similar to" dropdown
+  const [loadingTargetValues, setLoadingTargetValues] = useState(false);
 
   const selectedProjectIdRef = useRef(selectedProjectId);
   useEffect(() => {
@@ -175,6 +251,23 @@ function RecommenderPanel() {
   }, [selectedProjectId]);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  // Unified list for "similar to" — from /target-values API (works for content, parameter_driven, hybrid)
+  const similarToOptions = useMemo(() => {
+    if (!selectedProject || !targetValuesData?.target_values) return [];
+    return Array.isArray(targetValuesData.target_values) ? targetValuesData.target_values : [];
+  }, [selectedProject, targetValuesData?.target_values]);
+
+  const similarToValue = selectedProject?.model_type === "content" ? selectedItemTitle : selectedItemForSimilar;
+  const setSimilarToValue = selectedProject?.model_type === "content" ? setSelectedItemTitle : setSelectedItemForSimilar;
+  const showSimilarToInput = selectedProject?.model_type === "content" || selectedProject?.model_type === "parameter_driven" || selectedProject?.model_type === "hybrid";
+
+  // Display name for the column the model recommends (from /target-values or context-options)
+  const targetColumnLabel = useMemo(() => {
+    const raw = targetValuesData?.target_column || contextOptions?.target_column;
+    if (!raw || typeof raw !== "string") return "item";
+    return raw.replace(/_/g, " ").trim() || "item";
+  }, [targetValuesData?.target_column, contextOptions?.target_column]);
 
   const projectStats = useMemo(() => {
     const total = projects.length;
@@ -252,6 +345,7 @@ function RecommenderPanel() {
 
       if (data.status === "ready") {
         handleSelectProject(data.id);
+        clearCreateForm();
       } else if (data.status === "error") {
         setErrorMessage("Project processing failed.");
       }
@@ -261,11 +355,49 @@ function RecommenderPanel() {
     }
   };
 
+  const clearCreateForm = () => {
+    setProjectName("");
+    setContentFile(null);
+    setInteractionFile(null);
+    setContentHeaders([]);
+    setInteractionHeaders([]);
+    setContentSchema({ item_id: "", item_title: "", target_column: "", feature_cols: [] });
+    setParameterDrivenSchema({ target_column: "", feature_cols: [] });
+    setInteractionSchema({ user_id: "", item_id: "", rating: "" });
+  };
+
   const handleCreateProject = async (e) => {
     e.preventDefault();
-    if (!projectName || (!contentFile && !interactionFile)) {
+    const isParamDriven = projectMode === "parameter_driven";
+    if (isParamDriven && (!projectName || !contentFile)) {
+      setErrorMessage("Project name and a dataset file are required.");
+      return;
+    }
+    if (!isParamDriven && (!projectName || (!contentFile && !interactionFile))) {
       setErrorMessage("Project name and at least one file are required.");
       return;
+    }
+    if (isParamDriven && !parameterDrivenSchema.target_column) {
+      setErrorMessage("Select what you want to recommend (target column).");
+      return;
+    }
+    if (!isParamDriven && contentFile && interactionFile) {
+      if (!contentSchema.item_id?.trim()) {
+        setErrorMessage("Content file: select Item ID (links to ratings file).");
+        return;
+      }
+      if (!contentSchema.target_column?.trim() && !contentSchema.item_title?.trim()) {
+        setErrorMessage("Content file: select What to recommend or Item Title.");
+        return;
+      }
+      if (!interactionSchema.item_id?.trim()) {
+        setErrorMessage("Ratings file: select Item ID (must match content).");
+        return;
+      }
+      if (!interactionSchema.rating?.trim()) {
+        setErrorMessage("Ratings file: select Rating column.");
+        return;
+      }
     }
 
     setErrorMessage("");
@@ -277,9 +409,12 @@ function RecommenderPanel() {
 
     if (contentFile) {
       formData.append("content_file", contentFile);
-      formData.append("content_schema_json", JSON.stringify(contentSchema));
+      formData.append(
+        "content_schema_json",
+        JSON.stringify(isParamDriven ? parameterDrivenSchema : contentSchema)
+      );
     }
-    if (interactionFile) {
+    if (interactionFile && !isParamDriven) {
       formData.append("interaction_file", interactionFile);
       formData.append(
         "interaction_schema_json",
@@ -321,6 +456,26 @@ function RecommenderPanel() {
     }
   };
 
+  const handleRetrainProject = async (e, projectId) => {
+    e.stopPropagation();
+    setErrorMessage("");
+    try {
+      const response = await fetch(`${API_BACKEND}/project/${projectId}/retrain`, {
+        method: "POST",
+        headers: getBackendAuthHeaders(),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || "Retrain failed");
+      }
+      setSelectedProjectId(projectId);
+      setCurrentStatus("processing");
+      fetchProjects();
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to start retrain");
+    }
+  };
+
   const handleDeleteProject = async (e, projectId) => {
     e.stopPropagation();
     if (!window.confirm("Delete this project? This cannot be undone.")) return;
@@ -336,6 +491,7 @@ function RecommenderPanel() {
         setRecommendations(null);
         setItemsList([]);
         setUsersList([]);
+        setTargetValuesData(null);
       }
       fetchProjects();
     } catch (err) {
@@ -355,16 +511,56 @@ function RecommenderPanel() {
     setUsersList([]);
     setSelectedItemTitle("");
     setSelectedUserId("");
+    setSelectedItemForSimilar("");
+    setTargetValuesData(null);
 
     if (project.status !== "ready" || !project.model_type) return;
 
-    const needsItems = ["content", "hybrid"].includes(project.model_type);
-    const needsUsers = ["collaborative", "hybrid"].includes(project.model_type);
+    const needsItems = project.model_type === "content";
+    const needsUsers = project.model_type === "collaborative";
+    const needsContextOptions = project.model_type === "parameter_driven" || project.model_type === "hybrid";
+    const needsTargetValues = project.model_type === "content" || project.model_type === "parameter_driven" || project.model_type === "hybrid";
     if (needsItems) setLoadingItems(true);
     if (needsUsers) setLoadingUsers(true);
+    if (needsTargetValues) setLoadingTargetValues(true);
+    if (needsContextOptions) {
+      setContextOptions(null);
+      setContextSelections({});
+      setLoadingContextOptions(true);
+    }
 
     const headers = getBackendAuthHeaders();
     const stillForThisProject = () => selectedProjectIdRef.current === projectId;
+
+    const fetchTargetValues = needsTargetValues
+      ? fetch(`${API_BACKEND}/project/${projectId}/target-values`, { headers })
+          .then(async (res) => {
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              if (res.status === 401) {
+                setErrorMessage("Session expired. Please log in again.");
+                logout();
+              }
+              throw new Error(err.detail || "Failed to load target values");
+            }
+            return res.json();
+          })
+          .then((data) => {
+            if (!stillForThisProject()) return;
+            setTargetValuesData(data && typeof data.target_values !== "undefined" ? { target_column: data.target_column || "item", target_values: Array.isArray(data.target_values) ? data.target_values : [] } : null);
+            if (data?.target_values?.length && selectedProjectIdRef.current === projectId) {
+              setSelectedItemTitle(data.target_values[0] || "");
+              setSelectedItemForSimilar(data.target_values[0] || "");
+            }
+          })
+          .catch((e) => {
+            if (stillForThisProject()) setTargetValuesData(null);
+            if (e.message && !e.message.includes("Session expired")) console.error("Failed to fetch target values", e);
+          })
+          .finally(() => {
+            if (stillForThisProject()) setLoadingTargetValues(false);
+          })
+      : Promise.resolve();
 
     const fetchItems = needsItems
       ? fetch(`${API_BACKEND}/project/${projectId}/items`, { headers })
@@ -444,7 +640,36 @@ function RecommenderPanel() {
           })
       : Promise.resolve();
 
-    await Promise.all([fetchItems, fetchUsers]);
+    const fetchContextOptions = needsContextOptions
+      ? fetch(`${API_BACKEND}/project/${projectId}/context-options`, { headers })
+          .then(async (res) => {
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              if (res.status === 401) {
+                setErrorMessage("Session expired. Please log in again.");
+                logout();
+              } else setErrorMessage(err.detail || "Failed to load context options.");
+              throw new Error(err.detail || "Failed to load context options");
+            }
+            return res.json();
+          })
+          .then((data) => {
+            if (!stillForThisProject()) return;
+            setErrorMessage("");
+            setContextOptions(data);
+            setContextSelections({});
+            setSelectedCriteria([]);
+          })
+          .catch((e) => {
+            if (stillForThisProject()) setContextOptions(null);
+            if (e.message && !e.message.includes("Session expired")) console.error("Failed to fetch context options", e);
+          })
+          .finally(() => {
+            if (stillForThisProject()) setLoadingContextOptions(false);
+          })
+      : Promise.resolve();
+
+    await Promise.all([fetchItems, fetchUsers, fetchContextOptions, fetchTargetValues]);
   };
 
   const handleGetRecommendations = async (e) => {
@@ -456,20 +681,23 @@ function RecommenderPanel() {
     setErrorMessage("");
 
     const params = new URLSearchParams();
-    if (["content", "hybrid"].includes(selectedProject.model_type)) {
-      params.append("item_title", selectedItemTitle);
+    params.append("n", "10");
+    if (selectedProject.model_type === "parameter_driven" || selectedProject.model_type === "hybrid") {
+      if (selectedItemForSimilar && String(selectedItemForSimilar).trim()) {
+        params.append("item_title", String(selectedItemForSimilar).trim());
+      } else {
+        (selectedCriteria || []).forEach((key) => {
+          const val = contextSelections?.[key];
+          if (val != null && String(val).trim() !== "") params.append(key, String(val).trim());
+        });
+      }
     }
-    if (["collaborative", "hybrid"].includes(selectedProject.model_type)) {
-      params.append("user_id", selectedUserId);
-    }
+    if (selectedProject.model_type === "collaborative") params.append("user_id", selectedUserId);
+    if (selectedProject.model_type === "content") params.append("item_title", selectedItemTitle);
 
     try {
-      params.append("n", "10");
       const url = `${API_BACKEND}/project/${selectedProjectId}/recommendations?${params.toString()}`;
-
-      const response = await fetch(url, {
-        headers: getBackendAuthHeaders(),
-      });
+      const response = await fetch(url, { headers: getBackendAuthHeaders() });
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
@@ -477,7 +705,8 @@ function RecommenderPanel() {
       }
 
       const data = await response.json();
-      setRecommendations(data.recommendations);
+      const recs = Array.isArray(data.recommendations) ? data.recommendations : [];
+      setRecommendations(recs);
     } catch (error) {
       console.error("Recommendation error:", error);
       setErrorMessage(error.message);
@@ -504,7 +733,7 @@ function RecommenderPanel() {
             AI-Powered Recommendations
           </h1>
           <p className="text-sm text-slate-600 max-w-2xl font-third leading-relaxed">
-            Build and deploy intelligent recommendation systems with content-based, collaborative, and hybrid filtering.
+            Upload your data, choose what to recommend and what to base it on, then get smart suggestions. Works with any CSV.
           </p>
         </motion.div>
 
@@ -611,19 +840,97 @@ function RecommenderPanel() {
                     </div>
                   </div>
 
-                  <div className="space-y-6">
+                    <div className="space-y-6">
                     <div>
                       <label className="block text-sm font-bold text-gray-900 mb-2 font-third">
                         Project Name
                       </label>
                       <Input
                         type="text"
-                        placeholder="e.g., My Movie Recommender"
+                        placeholder="e.g., My Recommender"
                         value={projectName}
                         onChange={(e) => setProjectName(e.target.value)}
                       />
                     </div>
 
+                    <div>
+                      <label className="block text-sm font-bold text-gray-700 mb-2 font-third">
+                        How do you want to build recommendations?
+                      </label>
+                      <Select
+                        value={projectMode}
+                        onChange={(e) => {
+                          setProjectMode(e.target.value);
+                          setContentFile(null);
+                          setInteractionFile(null);
+                          setContentHeaders([]);
+                          setInteractionHeaders([]);
+                        }}
+                      >
+                        <option value="parameter_driven">One file: recommend one column based on others (easiest)</option>
+                        <option value="content_interaction">Two files: items + user ratings (advanced)</option>
+                      </Select>
+                      <p className="text-xs text-slate-500 mt-1.5 font-third">
+                        {projectMode === "parameter_driven"
+                          ? "Upload a single CSV and pick what to recommend and what to match on."
+                          : "Upload a catalog of items and a file of user ratings."}
+                      </p>
+                    </div>
+
+                    {projectMode === "parameter_driven" ? (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="relative p-6 border-2 border-dashed border-slate-300 rounded-2xl bg-gradient-to-br from-cyan-50/50 via-white to-blue-50/30 hover:border-cyan-400 transition-all duration-300 overflow-hidden"
+                      >
+                        <div className="relative">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <span className="flex items-center justify-center w-7 h-7 rounded-full bg-cyan-500 text-white text-sm font-bold">1</span>
+                            <h3 className="font-bold text-base text-gray-900 font-third">
+                              Upload your data
+                            </h3>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-4 ml-9 font-third">
+                            Any CSV file (products, listings, etc.). The first row should be column headers.
+                          </p>
+                          <div className="ml-9 mb-6">
+                            <Input
+                              type="file"
+                              accept=".csv"
+                              onChange={(e) =>
+                                setContentFile(e.target.files?.[0] ?? null)
+                              }
+                            />
+                          </div>
+                          <AnimatePresence>
+                            {contentFile && (
+                              <>
+                                <div className="flex items-center space-x-3 mb-2">
+                                  <span className="flex items-center justify-center w-7 h-7 rounded-full bg-cyan-500 text-white text-sm font-bold">2</span>
+                                  <h3 className="font-bold text-base text-gray-900 font-third">
+                                    What do you want to recommend?
+                                  </h3>
+                                </div>
+                                <p className="text-sm text-gray-600 mb-4 ml-9 font-third">
+                                  Choose the column whose values will appear as recommendations. We&apos;ll use all other columns to find similar rows—no extra setup needed.
+                                </p>
+                                <div className="ml-9">
+                                  <SchemaMapper
+                                    title=""
+                                    headers={contentHeaders}
+                                    schema={parameterDrivenSchema}
+                                    onChange={setParameterDrivenSchema}
+                                    schemaKeys={[
+                                      { key: "target_column", label: "Recommend values from this column" },
+                                    ]}
+                                  />
+                                </div>
+                              </>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </motion.div>
+                    ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <motion.div
                         whileHover={{ scale: 1.0 }}
@@ -641,7 +948,7 @@ function RecommenderPanel() {
                             </h3>
                           </div>
                           <p className="text-sm text-gray-600 mb-4 font-third">
-                            Upload item details (e.g., movies.csv)
+                            Item/catalog CSV. Must include a column that links to the ratings file (e.g. item ID).
                           </p>
                           <Input
                             type="file"
@@ -660,11 +967,12 @@ function RecommenderPanel() {
                                 schema={contentSchema}
                                 onChange={setContentSchema}
                                 schemaKeys={[
-                                  { key: "item_id", label: "Item ID Column" },
-                                  { key: "item_title", label: "Item Title Column" },
+                                  { key: "item_id", label: "Item ID (same column name as in ratings file)" },
+                                  { key: "item_title", label: "Item Title / Name (for display)" },
+                                  { key: "target_column", label: "What to recommend (e.g. item name or ID)" },
                                   {
                                     key: "feature_cols",
-                                    label: "Feature Columns",
+                                    label: "Feature Columns (filters)",
                                     multi: true,
                                   },
                                 ]}
@@ -690,7 +998,7 @@ function RecommenderPanel() {
                             </h3>
                           </div>
                           <p className="text-sm text-gray-600 mb-4 font-third">
-                            Upload user ratings (e.g., ratings.csv)
+                            Ratings CSV: must have item ID (same as content) and rating. User ID only needed for collaborative.
                           </p>
                           <Input
                             type="file"
@@ -704,14 +1012,14 @@ function RecommenderPanel() {
                           <AnimatePresence>
                             {interactionFile && (
                               <SchemaMapper
-                                title="Map Interaction Schema"
+                                title="Map Ratings Schema"
                                 headers={interactionHeaders}
                                 schema={interactionSchema}
                                 onChange={setInteractionSchema}
                                 schemaKeys={[
-                                  { key: "user_id", label: "User ID Column" },
-                                  { key: "item_id", label: "Item ID Column" },
+                                  { key: "item_id", label: "Item ID (must match content file)" },
                                   { key: "rating", label: "Rating Column" },
+                                  { key: "user_id", label: "User ID (optional, for collaborative only)" },
                                 ]}
                               />
                             )}
@@ -719,6 +1027,7 @@ function RecommenderPanel() {
                         </div>
                       </motion.div>
                     </div>
+                    )}
 
                     <Button
                       onClick={handleCreateProject}
@@ -828,53 +1137,166 @@ function RecommenderPanel() {
                           <motion.span
                             whileHover={{ scale: 1.05 }}
                             className={`text-xs font-bold px-4 py-2 rounded-full shadow-sm ${
-                              selectedProject.model_type === "content"
+                              selectedProject.model_type === "parameter_driven"
+                                ? "bg-gradient-to-r from-cyan-100 to-blue-100 text-cyan-800 border-2 border-cyan-200"
+                                : selectedProject.model_type === "content"
                                 ? "bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-800 border-2 border-emerald-200"
                                 : selectedProject.model_type === "collaborative"
                                 ? "bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-800 border-2 border-amber-200"
                                 : "bg-gradient-to-r from-purple-100 to-pink-100 text-purple-800 border-2 border-purple-200"
                             }`}
                           >
-                            {selectedProject.model_type?.toUpperCase()}
+                            {selectedProject.model_type === "parameter_driven" ? "PARAMETER-DRIVEN" : selectedProject.model_type?.toUpperCase()}
                           </motion.span>
                         </div>
                       </motion.div>
 
-                      {(selectedProject.model_type === "content" ||
-                        selectedProject.model_type === "hybrid") && (
+                      {/* Use the same attribute the model recommends as the input: select a value → get similar values (works for any dataset: car brand, movie title, product name, etc.) */}
+                      {showSimilarToInput && (
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: 0.1 }}
+                          transition={{ delay: 0.05 }}
+                          className="p-4 rounded-2xl bg-gradient-to-br from-cyan-50 to-blue-50 border-2 border-cyan-200"
                         >
-                          <label className="block text-sm font-bold text-gray-700 mb-2 font-third">
-                            Select Item
-                          </label>
-                          <Select
-                            value={selectedItemTitle}
-                            onChange={(e) =>
-                              setSelectedItemTitle(e.target.value)
-                            }
-                            disabled={loadingItems}
-                          >
-                            <option value="">
-                              {loadingItems
-                                ? "Loading items..."
-                                : itemsList.length === 0
-                                ? "No items"
-                                : "Select an item..."}
-                            </option>
-                            {itemsList.map((item) => (
-                              <option key={item.id} value={item.title}>
-                                {item.title}
-                              </option>
-                            ))}
-                          </Select>
+                          <h4 className="text-sm font-bold text-gray-800 font-third mb-1">
+                            Use {targetColumnLabel} to get similar recommendations
+                          </h4>
+                          <p className="text-xs text-gray-600 font-third mb-3">
+                            Select a {targetColumnLabel} from your dataset. You’ll get back other {targetColumnLabel}s that are similar (same type your model was trained to recommend).
+                          </p>
+                          {loadingTargetValues ? (
+                            <p className="text-sm text-slate-500 font-third">Loading...</p>
+                          ) : similarToOptions.length > 0 ? (
+                            <SearchableSelect
+                              id="similar-to-item"
+                              value={similarToValue}
+                              onChange={setSimilarToValue}
+                              options={similarToOptions}
+                              placeholder={`Select ${targetColumnLabel === "item" ? "an" : "a"} ${targetColumnLabel}...`}
+                            />
+                          ) : (
+                            <p className="text-xs text-amber-700 font-third">
+                              No {targetColumnLabel}s to show. {selectedProject.model_type === "parameter_driven" || selectedProject.model_type === "hybrid" ? "Use filters below instead." : "Check that the project has content data."}
+                            </p>
+                          )}
                         </motion.div>
                       )}
 
-                      {(selectedProject.model_type === "collaborative" ||
-                        selectedProject.model_type === "hybrid") && (
+                      {(selectedProject.model_type === "parameter_driven" || selectedProject.model_type === "hybrid") && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.08 }}
+                          className="space-y-4"
+                        >
+                          <h4 className="text-sm font-bold text-gray-700 font-third">
+                            Or use filters instead
+                          </h4>
+                          <p className="text-xs text-gray-600 font-third">
+                            {selectedProject.model_type === "hybrid"
+                              ? "Pick features and a rating to get recommendations matching your criteria."
+                              : "Leave “similar to” empty and set filter values below to get recommendations by criteria."}
+                          </p>
+                          {loadingContextOptions ? (
+                            <p className="text-sm text-gray-500 font-third">Loading options...</p>
+                          ) : contextOptions?.feature_columns?.length ? (
+                            <>
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-2 font-third">
+                                  Filter by (select which to use)
+                                </label>
+                                <div className="flex flex-wrap gap-3">
+                                  {contextOptions.feature_columns.map((fc) => {
+                                    const isSelected = (selectedCriteria || []).includes(fc.name);
+                                    return (
+                                      <label
+                                        key={fc.name}
+                                        className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 cursor-pointer transition-all font-third text-sm ${
+                                          isSelected
+                                            ? "bg-cyan-50 border-cyan-400 text-cyan-800"
+                                            : "bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300"
+                                        }`}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={(e) => {
+                                            if (e.target.checked) {
+                                              setSelectedCriteria((prev) => [...(prev || []), fc.name]);
+                                              if (contextSelections[fc.name] != null) return;
+                                              if (fc.column_type === "numeric" && fc.numeric_range) {
+                                                const { min, max } = fc.numeric_range;
+                                                const mid = min + (max - min) / 2;
+                                                setContextSelections((s) => ({ ...s, [fc.name]: String(Number(mid.toFixed(6))) }));
+                                              } else if (fc.values?.length) {
+                                                setContextSelections((s) => ({ ...s, [fc.name]: fc.values[0] }));
+                                              }
+                                            } else {
+                                              setSelectedCriteria((prev) => (prev || []).filter((c) => c !== fc.name));
+                                            }
+                                          }}
+                                          className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-400"
+                                        />
+                                        <span>{fc.name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              {selectedCriteria?.length > 0 && (
+                                <div className="space-y-3 pt-2 border-t border-slate-200">
+                                  <p className="text-xs font-bold text-gray-600 font-third">Set values (optional)</p>
+                                  {contextOptions.feature_columns
+                                    .filter((fc) => selectedCriteria.includes(fc.name))
+                                    .map((fc) => {
+                                      const isNumeric = fc.column_type === "numeric" && fc.numeric_range;
+                                      const range = fc.numeric_range || {};
+                                      const numVal = contextSelections[fc.name];
+                                      const catOptions = (fc.values || []).filter((v) => v != null && String(v).trim() && String(v).toLowerCase() !== "nan");
+                                      return (
+                                        <div key={fc.name}>
+                                          <label className="block text-xs font-bold text-gray-600 mb-1 font-third">
+                                            {fc.name}
+                                            {isNumeric && range.min != null && range.max != null && (
+                                              <span className="text-slate-400 font-normal ml-1">({range.min} – {range.max})</span>
+                                            )}
+                                          </label>
+                                          {isNumeric ? (
+                                            <input
+                                              type="number"
+                                              min={range.min}
+                                              max={range.max}
+                                              step="any"
+                                              value={numVal ?? ""}
+                                              onChange={(e) =>
+                                                setContextSelections((prev) => ({ ...prev, [fc.name]: e.target.value }))
+                                              }
+                                              placeholder="Any"
+                                              className="w-full px-4 py-3 border-2 border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 bg-white text-sm font-third"
+                                            />
+                                          ) : (
+                                            <SearchableSelect
+                                              id={`context-${fc.name}`}
+                                              value={contextSelections[fc.name] ?? ""}
+                                              onChange={(v) => setContextSelections((prev) => ({ ...prev, [fc.name]: v }))}
+                                              options={catOptions}
+                                              placeholder="Any"
+                                            />
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-sm text-gray-500 font-third">No options available.</p>
+                          )}
+                        </motion.div>
+                      )}
+
+                      {selectedProject.model_type === "collaborative" && (
                         <motion.div
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
@@ -935,41 +1357,63 @@ function RecommenderPanel() {
                               </h3>
                             </div>
                             <div className="space-y-3">
-                              {recommendations.map((rec, index) => {
-                                const titleKey = Object.keys(rec).find(
-                                  (k) =>
-                                    k.toLowerCase().includes("title") ||
-                                    k.toLowerCase().includes("name")
-                                );
-                                const idKey = Object.keys(rec).find((k) =>
-                                  k.toLowerCase().includes("id")
-                                );
+                              {(() => {
+                                const list = Array.isArray(recommendations) ? recommendations : [];
+                                const valid = list.filter((rec) => {
+                                  if (!rec || typeof rec !== "object") return false;
+                                  const isParamDriven = "value" in rec;
+                                  const v = isParamDriven ? rec.value : (rec.title ?? rec.item_title ?? rec.id ?? rec.item_id ?? "");
+                                  const s = String(v ?? "").trim().toLowerCase();
+                                  return s.length > 0 && s !== "nan" && s !== "none" && s !== "null";
+                                });
+                                if (valid.length === 0) {
+                                  return (
+                                    <p className="text-slate-600 font-third py-6 text-center">
+                                      {list.length === 0
+                                        ? "No recommendations to show. Try different criteria or leave some filters as &quot;Any&quot;."
+                                        : "No valid recommendations in the response. Try different criteria."}
+                                    </p>
+                                  );
+                                }
                                 return (
-                                  <motion.div
-                                    key={index}
-                                    initial={{ opacity: 0, x: -20 }}
-                                    animate={{ opacity: 1, x: 0 }}
-                                    transition={{ delay: index * 0.05, duration: 0.3 }}
-                                    whileHover={{ scale: 1.00, x: 0 }}
-                                    className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
-                                  >
-                                    <div className="flex items-center space-x-4">
-                                      <motion.div
-                                        whileHover={{ rotate: 0 }}
-                                        transition={{ duration: 0.6 }}
-                                        className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0"
-                                      >
-                                        {index + 1}
-                                      </motion.div>
-                                      <p className="text-gray-900 font-semibold font-third flex-1">
-                                        {titleKey
-                                          ? rec[titleKey]
-                                          : `ID: ${rec[idKey]}`}
-                                      </p>
-                                    </div>
-                                  </motion.div>
+                                  <>
+                                    <p className="text-xs text-slate-500 font-third mb-2">Showing {valid.length} recommendation{valid.length !== 1 ? "s" : ""}</p>
+                                    {valid.map((rec, index) => {
+                                  const isParamDriven = "value" in rec && "score" in rec;
+                                  const displayText = isParamDriven
+                                    ? rec.value
+                                    : (rec.title ?? rec.item_title ?? (rec.id != null ? `ID: ${rec.id}` : rec.item_id != null ? `ID: ${rec.item_id}` : JSON.stringify(rec)));
+                                  const scoreNum = isParamDriven && rec.score != null ? Number(rec.score) : null;
+                                  return (
+                                    <motion.div
+                                      key={index}
+                                      initial={{ opacity: 0, x: -20 }}
+                                      animate={{ opacity: 1, x: 0 }}
+                                      transition={{ delay: index * 0.05, duration: 0.3 }}
+                                      whileHover={{ scale: 1.00, x: 0 }}
+                                      className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
+                                    >
+                                      <div className="flex items-center justify-between gap-4">
+                                        <div className="flex items-center space-x-4 min-w-0">
+                                          <span className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0">
+                                            {index + 1}
+                                          </span>
+                                          <p className="text-gray-900 font-semibold font-third truncate">
+                                            {displayText}
+                                          </p>
+                                        </div>
+                                        {scoreNum != null && !Number.isNaN(scoreNum) && (
+                                          <span className="text-xs text-slate-400 font-third flex-shrink-0">
+                                            match {Math.round(scoreNum * 100)}%
+                                          </span>
+                                        )}
+                                      </div>
+                                    </motion.div>
+                                  );
+                                })}
+                                  </>
                                 );
-                              })}
+                              })()}
                             </div>
                           </motion.div>
                         )}
@@ -1048,6 +1492,19 @@ function RecommenderPanel() {
                               #{p.id}
                             </span>
                             <div className="flex items-center gap-2">
+                              {(p.status === "ready" || p.status === "error") && (
+                                <motion.button
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  type="button"
+                                  onClick={(e) => handleRetrainProject(e, p.id)}
+                                  className="p-2 rounded-xl text-gray-400 hover:text-cyan-600 transition-colors"
+                                  title="Retrain model (same data)"
+                                  aria-label="Retrain"
+                                >
+                                  <RotateCw className="w-4 h-4" />
+                                </motion.button>
+                              )}
                               <motion.button
                                 whileHover={{ scale: 1.1, rotate: 0 }}
                                 whileTap={{ scale: 0.9 }}
@@ -1092,7 +1549,9 @@ function RecommenderPanel() {
                           <motion.span
                             whileHover={{ scale: 1.0 }}
                             className={`inline-block text-xs font-bold uppercase px-4 py-2 rounded-full  ${
-                              p.model_type === "content"
+                              p.model_type === "parameter_driven"
+                                ? "bg-gradient-to-r from-cyan-300 to-blue-100 text-cyan-800 border-2 border-cyan-200"
+                                : p.model_type === "content"
                                 ? "bg-gradient-to-r from-emerald-300 to-teal-100 text-emerald-800 border-2 border-emerald-200"
                                 : p.model_type === "collaborative"
                                 ? "bg-gradient-to-r from-pink-300 to-yellow-100 text-amber-800 border-2 border-amber-200"
@@ -1101,7 +1560,7 @@ function RecommenderPanel() {
                                 : "bg-gray-100 text-gray-800"
                             }`}
                           >
-                            {p.model_type || "N/A"}
+                            {p.model_type === "parameter_driven" ? "parameter-driven" : p.model_type || "N/A"}
                           </motion.span>
                         </div>
                       </motion.div>

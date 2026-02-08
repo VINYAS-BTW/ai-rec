@@ -1,4 +1,6 @@
-import "dotenv/config";
+// Load .env first so DATABASE_URL is set before db/index.js runs (ES modules run imports before other code)
+import "./loadEnv.js";
+
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";

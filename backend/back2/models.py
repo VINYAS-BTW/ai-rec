@@ -13,6 +13,7 @@ class ModelType(str, enum.Enum):
     CONTENT = "content"
     COLLABORATIVE = "collaborative"
     HYBRID = "hybrid"
+    PARAMETER_DRIVEN = "parameter_driven"
 
 class FileType(str, enum.Enum):
     CONTENT = "content"

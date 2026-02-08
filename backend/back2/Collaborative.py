@@ -34,6 +34,18 @@ class CollaborativeFilteringRecommender:
             columns=schema_map['item_id'],
             values=schema_map['rating']
         )
+        n_users, n_items = self.original_ratings_pivot.shape
+        # Use adaptive n_components to avoid overfitting on small matrices
+        effective_components = min(
+            self.n_components,
+            n_users - 1,
+            n_items - 1,
+            max(2, n_users // 2, n_items // 2)
+        )
+        effective_components = max(2, effective_components)
+        if effective_components != self.n_components:
+            self.n_components = effective_components
+            self.svd = TruncatedSVD(n_components=self.n_components, random_state=42)
         
         # 2. Calculate the mean rating for each user
         self.user_means = self.original_ratings_pivot.mean(axis=1)
@@ -46,7 +58,7 @@ class CollaborativeFilteringRecommender:
 
         # 5. Fit SVD on the de-meaned data
         self.user_features = self.svd.fit_transform(demeaned_ratings_filled)
-        self.item_features = self.svd.components_ # (n_components, n_items)
+        self.item_features = self.svd.components_  # (n_components, n_items)
         
         # Store the user and item IDs in order
         self.user_ids = demeaned_ratings_filled.index
@@ -82,6 +94,24 @@ class CollaborativeFilteringRecommender:
         rated_items = self.original_ratings_pivot.loc[user_id].dropna().index
 
         # 7. Filter out already-rated items and sort
-        recommendations = predicted_series.drop(rated_items).sort_values(ascending=False)
+        recommendations = predicted_series.drop(rated_items, errors="ignore").sort_values(ascending=False)
 
         return recommendations.head(n).index.tolist()
+
+    def recommend_with_scores(self, user_id, n=10):
+        """
+        Returns top n recommended items with predicted rating scores for hybrid fusion.
+        Returns: list of dicts [{"item_id": str, "score": float}, ...]
+        """
+        if user_id not in self.user_ids:
+            return []
+        user_index = self.user_ids.get_loc(user_id)
+        user_vector = self.user_features[user_index]
+        predicted_deviations = np.dot(user_vector, self.item_features)
+        user_mean = self.user_means.loc[user_id]
+        predicted_ratings = predicted_deviations + user_mean
+        predicted_series = pd.Series(predicted_ratings, index=self.item_ids)
+        rated_items = self.original_ratings_pivot.loc[user_id].dropna().index
+        recommendations = predicted_series.drop(rated_items, errors="ignore").sort_values(ascending=False)
+        top = recommendations.head(n)
+        return [{"item_id": str(i), "score": float(s)} for i, s in top.items()]

@@ -8,13 +8,16 @@ import uuid
 import json
 import asyncio
 import pickle
+import shutil
 import numpy as np
 import tempfile
 import jwt
-from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict
 
@@ -48,6 +51,7 @@ import mlflow
 # --- Import your classes ---
 from Content import ContentBasedRecommender
 from Collaborative import CollaborativeFilteringRecommender
+from ParameterDriven import ParameterDrivenRecommender
 # --- Import the MLflow wrapper ---
 from dynamic_recommender import MLflowRecommenderWrapper
 from datetime import datetime
@@ -93,8 +97,14 @@ async def lifespan(app: FastAPI):
     print("Server starting...")
     if not os.getenv("JWT_SECRET"):
         print("WARNING: JWT_SECRET not set in backend/back2/.env. Set it (same value as auth service) or project list will return 500 and users will see no projects.")
-    database.create_db_and_tables()
-    print("Database tables created.")
+    try:
+        database.create_db_and_tables()
+        print("Database tables created.")
+    except Exception as e:
+        print(f"WARNING: Could not connect to database. Server will start but project/recommendation APIs will fail. Error: {e}")
+        print("  Check DATABASE_URL in .env and network (PostgreSQL/Neon required).")
+        if "could not translate host name" in str(e) or "Name or service not known" in str(e):
+            print("  → DNS cannot resolve the Neon host. Try: Neon dashboard → Connection string → use 'Direct' (non-pooler) URL, or check network/VPN/DNS (e.g. 8.8.8.8).")
     yield
     print("Server shutting down.")
 
@@ -106,6 +116,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(OperationalError)
+def handle_db_unavailable(request: Request, exc: OperationalError):
+    """Return 503 with a clear message when DB (Neon/PostgreSQL) is unreachable."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Database unavailable. Check DATABASE_URL in backend/back2/.env and ensure Neon/PostgreSQL is reachable (network, DNS)."
+        },
+    )
 
 # --- Auth: JWT from auth service, or X-Internal-Key for server-to-server (webhook service) ---
 BACK2_INTERNAL_KEY = os.getenv("BACK2_INTERNAL_KEY", "")
@@ -239,17 +260,23 @@ async def process_project(project_id: int, db: Session):
         all_schemas_map = {} 
         
         if content_file:
-            df_content = pd.read_csv(content_file.storage_path)
+            df_content = pd.read_csv(content_file.storage_path, low_memory=False)
             content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key != 'feature_col' and (s.user_csv_column or '').strip()}
             content_schema['feature_cols'] = [s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key == 'feature_col' and (s.user_csv_column or '').strip()]
+            if 'target_column' not in content_schema:
+                content_schema['target_column'] = next((s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key == 'target_column' and (s.user_csv_column or '').strip()), None)
+            # If target_column set but no feature_cols (single-dataset simple flow), use all other columns
+            if content_schema.get('target_column') and not content_schema.get('feature_cols'):
+                content_schema['feature_cols'] = [c for c in df_content.columns if c != content_schema['target_column']]
             all_schemas_map['content'] = content_schema
 
         if interaction_file:
             df_interaction = pd.read_csv(interaction_file.storage_path)
-            # Ensure user_id and item_id are strings for consistency
             schema_map = {s.app_schema_key: s.user_csv_column for s in interaction_file.schema_mappings}
-            df_interaction[schema_map['user_id']] = df_interaction[schema_map['user_id']].astype(str)
-            df_interaction[schema_map['item_id']] = df_interaction[schema_map['item_id']].astype(str)
+            if schema_map.get('user_id'):
+                df_interaction[schema_map['user_id']] = df_interaction[schema_map['user_id']].astype(str)
+            if schema_map.get('item_id'):
+                df_interaction[schema_map['item_id']] = df_interaction[schema_map['item_id']].astype(str)
             interaction_schema = schema_map
             all_schemas_map['interaction'] = interaction_schema
             
@@ -271,28 +298,94 @@ async def process_project(project_id: int, db: Session):
                 json.dump({"model_type": model_type, "schemas": all_schemas_map}, f)
             artifacts["model_type_config"] = model_type_config_path
             
-            # --- Train Content-Based Model (Updated) ---
-            if model_type in [models.ModelType.CONTENT, models.ModelType.HYBRID]:
+            # --- Train Parameter-Driven Model (single dataset, target + feature columns) ---
+            if model_type == models.ModelType.PARAMETER_DRIVEN:
+                if not content_schema.get("target_column"):
+                    raise ValueError("Parameter-driven model requires target_column in the content schema.")
+                if not content_schema.get("feature_cols"):
+                    content_schema["feature_cols"] = [c for c in df_content.columns if c != content_schema["target_column"]]
+                if not content_schema.get("feature_cols"):
+                    raise ValueError("Dataset has no columns besides the target. Add at least one other column.")
+                print(f"[Task {project_id}]: Fitting ParameterDrivenRecommender...")
+                pd_recommender = ParameterDrivenRecommender()
+                pd_recommender.fit(df_content, content_schema)
+                artifacts["pd_transformer"] = os.path.join(tmpdir, "pd_transformer.pkl")
+                artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                artifacts["pd_data"] = os.path.join(tmpdir, "pd_data.csv")
+                with open(artifacts["pd_transformer"], "wb") as f:
+                    pickle.dump(pd_recommender.column_transformer, f)
+                np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
+                pd_recommender.df.to_csv(artifacts["pd_data"], index=False)
+                print(f"[Task {project_id}]: Saved Parameter-driven model artifacts.")
+
+            # --- Train Content-Based Model (content-only; hybrid uses ParameterDriven) ---
+            if model_type == models.ModelType.CONTENT:
                 if not content_schema.get('feature_cols'):
-                    raise ValueError("Content/Hybrid model requires at least one feature column mapped in the content file schema.")
+                    raise ValueError("Content model requires at least one feature column mapped in the content file schema.")
                 if not content_schema.get('item_id') or not content_schema.get('item_title'):
                     raise ValueError("Content schema must have both item_id and item_title mapped.")
                 print(f"[Task {project_id}]: Fitting ContentBasedRecommender...")
                 cb_recommender = ContentBasedRecommender()
                 cb_recommender.fit(df_content, content_schema)
-                
-                # Define and save CB artifacts
                 artifacts["cb_cosine_sim"] = os.path.join(tmpdir, "cb_cosine_sim.pkl")
                 artifacts["cb_indices"] = os.path.join(tmpdir, "cb_indices.pkl")
                 artifacts["cb_data"] = os.path.join(tmpdir, "cb_data.csv")
-                
                 with open(artifacts["cb_cosine_sim"], 'wb') as f: pickle.dump(cb_recommender.cosine_sim, f)
                 with open(artifacts["cb_indices"], 'wb') as f: pickle.dump(cb_recommender.indices, f)
                 cb_recommender.df.to_csv(artifacts["cb_data"], index=False)
                 print(f"[Task {project_id}]: Saved Content model artifacts.")
 
-            # --- Train Collaborative Filtering Model (Updated) ---
-            if model_type in [models.ModelType.COLLABORATIVE, models.ModelType.HYBRID]:
+            # --- Train Hybrid: join Dataset1 (content) + Dataset2 (ratings) on common key, then ParameterDriven ---
+            # Hybrid = recommendations by selected features from dataset 1 + selected rating from dataset 2.
+            if model_type == models.ModelType.HYBRID:
+                if not content_schema.get("item_id") or content_schema["item_id"] not in df_content.columns:
+                    raise ValueError("Hybrid content schema must have item_id (the common key to link both datasets).")
+                if "item_id" not in interaction_schema or "rating" not in interaction_schema:
+                    raise ValueError("Hybrid ratings file schema must have item_id and rating.")
+                if interaction_schema["item_id"] not in df_interaction.columns or interaction_schema["rating"] not in df_interaction.columns:
+                    raise ValueError("Ratings file must contain the item_id and rating columns.")
+                # Align types for join
+                content_key = content_schema["item_id"]
+                ratings_key = interaction_schema["item_id"]
+                rating_col = interaction_schema["rating"]
+                df_content[content_key] = df_content[content_key].astype(str)
+                df_interaction[ratings_key] = df_interaction[ratings_key].astype(str)
+                # Aggregate ratings per item (mean)
+                ratings_agg = df_interaction.groupby(ratings_key)[rating_col].mean().reset_index()
+                ratings_agg = ratings_agg.rename(columns={rating_col: "mean_rating", ratings_key: content_key})
+                # Join: every content row gets mean_rating (left join)
+                df_joined = df_content.merge(ratings_agg, on=content_key, how="left")
+                df_joined["mean_rating"] = df_joined["mean_rating"].fillna(df_joined["mean_rating"].mean() if df_joined["mean_rating"].notna().any() else 0)
+                # Target: what to recommend (e.g. item title or item_id)
+                target_col = content_schema.get("target_column") or content_schema.get("item_title") or content_schema.get("item_id")
+                content_feature_cols = content_schema.get("feature_cols") or [c for c in df_content.columns if c != target_col and c != content_key]
+                if not content_feature_cols:
+                    content_feature_cols = [c for c in df_content.columns if c != target_col]
+                hybrid_feature_cols = [c for c in content_feature_cols if c in df_joined.columns] + ["mean_rating"]
+                if not hybrid_feature_cols:
+                    raise ValueError("Hybrid needs at least one feature from content or mean_rating.")
+                hybrid_schema = {
+                    "target_column": target_col,
+                    "feature_cols": hybrid_feature_cols,
+                    "item_id": content_key,
+                    "item_title": content_schema.get("item_title") or target_col,
+                }
+                print(f"[Task {project_id}]: Fitting Hybrid (joined data + ParameterDriven)...")
+                pd_recommender = ParameterDrivenRecommender()
+                pd_recommender.fit(df_joined, hybrid_schema)
+                artifacts["pd_transformer"] = os.path.join(tmpdir, "pd_transformer.pkl")
+                artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                artifacts["pd_data"] = os.path.join(tmpdir, "pd_data.csv")
+                with open(artifacts["pd_transformer"], "wb") as f:
+                    pickle.dump(pd_recommender.column_transformer, f)
+                np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
+                pd_recommender.df.to_csv(artifacts["pd_data"], index=False)
+                artifacts["cb_data"] = os.path.join(tmpdir, "cb_data.csv")
+                df_joined.to_csv(artifacts["cb_data"], index=False)
+                print(f"[Task {project_id}]: Saved Hybrid (joined content+ratings, ParameterDriven) artifacts.")
+
+            # --- Train Collaborative Filtering Model ---
+            if model_type == models.ModelType.COLLABORATIVE:
                 print(f"[Task {project_id}]: Fitting CollaborativeFilteringRecommender...")
                 cf_recommender = CollaborativeFilteringRecommender(n_components=50)
                 cf_recommender.fit(df_interaction, interaction_schema)
@@ -323,12 +416,13 @@ async def process_project(project_id: int, db: Session):
             model_name = f"project-{project_id}-recommender"
             # Save model to local directory (avoids MLflow artifact store / Windows path issues).
             saved_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
-            os.makedirs(saved_model_path, exist_ok=True)
+            if os.path.isdir(saved_model_path):
+                shutil.rmtree(saved_model_path)
             mlflow.pyfunc.save_model(
                 path=saved_model_path,
                 python_model=MLflowRecommenderWrapper(),
                 artifacts=artifacts,
-                code_paths=["dynamic_recommender.py", "Content.py", "Collaborative.py", "Hybrid.py"],
+                code_paths=["dynamic_recommender.py", "Content.py", "Collaborative.py", "Hybrid.py", "ParameterDriven.py"],
             )
             print(f"[Task {project_id}]: Model saved to {saved_model_path}")
 
@@ -381,10 +475,18 @@ async def create_project(
     model_type = None
     if content_file and interaction_file:
         model_type = models.ModelType.HYBRID
-    elif content_file:
-        model_type = models.ModelType.CONTENT
     elif interaction_file:
         model_type = models.ModelType.COLLABORATIVE
+    elif content_file:
+        # Single dataset: parameter-driven if schema has target_column
+        try:
+            content_schema = json.loads(content_schema_json)
+            if content_schema.get("target_column"):
+                model_type = models.ModelType.PARAMETER_DRIVEN  # feature_cols optional (default: all other columns)
+            else:
+                model_type = models.ModelType.CONTENT
+        except (json.JSONDecodeError, TypeError):
+            model_type = models.ModelType.CONTENT
 
     next_id = get_next_project_id(db)
     db_project = models.RecommenderProject(
@@ -413,6 +515,24 @@ async def create_project(
     
     db.refresh(db_project)
     return db_project
+
+
+@app.post("/project/{project_id}/retrain")
+def retrain_project(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Retrain the model using the project's existing dataset and schema. No need to re-upload files."""
+    db_project = get_project_for_user(project_id, current_user_id, db)
+    if not db_project.uploaded_files:
+        raise HTTPException(status_code=400, detail="Project has no uploaded files. Cannot retrain.")
+    db_project.status = models.ProjectStatus.PROCESSING
+    db.commit()
+    background_db = database.SessionLocal()
+    background_tasks.add_task(process_project, project_id, background_db)
+    return {"message": "Retrain started.", "status": "processing"}
 
 
 @app.get("/projects/", response_model=List[schemas.RecommenderProject])
@@ -469,12 +589,57 @@ def get_project_data(project_id: int, user_id: int, db: Session, file_type: mode
     if not file:
         raise HTTPException(status_code=404, detail=f"{file_type} file not found for this project.")
         
-    df = pd.read_csv(file.storage_path)
+    df = pd.read_csv(file.storage_path, low_memory=False)
     schema = {s.app_schema_key: s.user_csv_column for s in file.schema_mappings}
     return df, schema
 
 # Max items/users returned for dropdowns (keeps response and UI fast)
 ITEMS_USERS_LIMIT = 2000
+
+
+def _resolve_target_column_and_values(df: pd.DataFrame, content_schema: dict) -> tuple:
+    """Return (target_column_name, list of distinct values) for the column the model recommends. Handles column name mismatch (case-insensitive)."""
+    target_col = content_schema.get("target_column") or content_schema.get("item_title") or content_schema.get("item_id")
+    if not target_col or not isinstance(target_col, str):
+        return ("", [])
+    target_col = target_col.strip()
+    # Resolve column: exact match, then case-insensitive
+    if target_col in df.columns:
+        col = target_col
+    else:
+        lower_map = {c.strip().lower(): c for c in df.columns if isinstance(c, str)}
+        col = lower_map.get(target_col.lower()) if target_col else None
+    if not col or col not in df.columns:
+        return (target_col, [])
+    _invalid = {"", "nan", "none", "null"}
+    values = df[col].dropna().astype(str).str.strip().unique().tolist()
+    values = [v for v in values if v and v.lower() not in _invalid]
+    values = sorted(set(values))[:ITEMS_USERS_LIMIT]
+    return (target_col, values)
+
+
+@app.get("/project/{project_id}/target-values", response_model=schemas.TargetValuesResponse)
+def get_project_target_values(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Returns the list of values for the column the model recommends (for 'similar to' dropdown). Works for content, parameter_driven, and hybrid."""
+    db_project = get_project_for_user(project_id, current_user_id, db)
+    if db_project.status != models.ProjectStatus.READY:
+        raise HTTPException(status_code=400, detail="Project is not ready.")
+    if db_project.model_type not in (models.ModelType.CONTENT, models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        raise HTTPException(status_code=400, detail="Target values are only for content, parameter_driven, or hybrid projects.")
+    content_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.CONTENT), None)
+    if not content_file:
+        raise HTTPException(status_code=404, detail="Content file not found.")
+    content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings}
+    df = pd.read_csv(content_file.storage_path, low_memory=False)
+    target_col, target_values = _resolve_target_column_and_values(df, content_schema)
+    if not target_col:
+        raise HTTPException(status_code=400, detail="Schema is missing target_column or item_title.")
+    return schemas.TargetValuesResponse(target_column=target_col, target_values=target_values)
+
 
 @app.get("/project/{project_id}/items", response_model=List[schemas.ProjectItemResponse])
 def get_project_items(
@@ -507,8 +672,96 @@ def get_project_users(
         raise HTTPException(status_code=500, detail=f"Error loading users: {e}")
 
 
+@app.get("/project/{project_id}/context-options", response_model=schemas.ContextOptionsResponse)
+def get_project_context_options(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """For parameter_driven and hybrid projects: returns target_column and feature columns with sample values. Hybrid uses joined (content + ratings) data so Rating is included."""
+    db_project = get_project_for_user(project_id, current_user_id, db)
+    if db_project.status != models.ProjectStatus.READY:
+        raise HTTPException(status_code=400, detail="Project is not ready.")
+    if db_project.model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        raise HTTPException(status_code=400, detail="Context options are only available for parameter_driven or hybrid projects.")
+    content_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.CONTENT), None)
+    if not content_file:
+        raise HTTPException(status_code=404, detail="Content file not found.")
+    content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings}
+    target_col = content_schema.get("target_column") or content_schema.get("item_title") or content_schema.get("item_id")
+    content_feature_cols = [s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key == "feature_col" and (s.user_csv_column or "").strip()]
+
+    if db_project.model_type == models.ModelType.HYBRID:
+        interaction_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.INTERACTION), None)
+        if not interaction_file:
+            raise HTTPException(status_code=404, detail="Hybrid project requires both content and ratings files.")
+        df_content = pd.read_csv(content_file.storage_path, low_memory=False)
+        df_interaction = pd.read_csv(interaction_file.storage_path, low_memory=False)
+        interaction_schema = {s.app_schema_key: s.user_csv_column for s in interaction_file.schema_mappings}
+        if "item_id" not in interaction_schema or "rating" not in interaction_schema:
+            raise HTTPException(status_code=400, detail="Ratings file must have item_id and rating mapped.")
+        content_key = content_schema["item_id"]
+        ratings_key = interaction_schema["item_id"]
+        rating_col = interaction_schema["rating"]
+        df_content[content_key] = df_content[content_key].astype(str)
+        df_interaction[ratings_key] = df_interaction[ratings_key].astype(str)
+        ratings_agg = df_interaction.groupby(ratings_key)[rating_col].mean().reset_index()
+        ratings_agg = ratings_agg.rename(columns={rating_col: "mean_rating", ratings_key: content_key})
+        df = df_content.merge(ratings_agg, on=content_key, how="left")
+        df["mean_rating"] = df["mean_rating"].fillna(df["mean_rating"].mean() if df["mean_rating"].notna().any() else 0)
+        if not content_feature_cols:
+            content_feature_cols = [c for c in df_content.columns if c != target_col and c != content_key]
+        feature_cols = [c for c in content_feature_cols if c in df.columns] + ["mean_rating"]
+    else:
+        df = pd.read_csv(content_file.storage_path, low_memory=False)
+        feature_cols = content_feature_cols
+        if not feature_cols:
+            feature_cols = [c for c in df.columns if c != target_col]
+
+    if not target_col:
+        raise HTTPException(status_code=400, detail="Content schema is missing target_column (or item_title/item_id).")
+    if not feature_cols:
+        raise HTTPException(status_code=400, detail="No feature columns available.")
+    feature_columns = []
+    _invalid = {"", "nan", "none", "null"}
+    for col in feature_cols:
+        if col not in df.columns:
+            continue
+        series = df[col].dropna()
+        if len(series) == 0:
+            continue
+        numeric_series = pd.to_numeric(series, errors="coerce")
+        valid_numeric = numeric_series.notna()
+        if valid_numeric.sum() >= 0.5 * len(series):
+            min_val = float(numeric_series.min())
+            max_val = float(numeric_series.max())
+            if min_val == max_val:
+                max_val = min_val + 1.0
+            feature_columns.append(
+                schemas.ContextOptionColumn(
+                    name=col,
+                    values=[],
+                    column_type="numeric",
+                    numeric_range={"min": min_val, "max": max_val},
+                )
+            )
+        else:
+            values = series.astype(str).str.strip().unique().tolist()
+            values = [v for v in values if v and v.lower() not in _invalid]
+            values = sorted(set(values))
+            feature_columns.append(
+                schemas.ContextOptionColumn(name=col, values=values, column_type="categorical")
+            )
+    # Distinct values of the target column (same resolution as /target-values: handles case-insensitive column match)
+    _resolved_col, target_values = _resolve_target_column_and_values(df, content_schema)
+    if _resolved_col:
+        target_col = _resolved_col
+    return schemas.ContextOptionsResponse(target_column=target_col, feature_columns=feature_columns, target_values=target_values)
+
+
 @app.get("/project/{project_id}/recommendations", response_model=schemas.RecommendationResponse)
 def get_recommendations(
+    request: Request,
     project_id: int,
     user_id: Optional[str] = None,
     item_title: Optional[str] = None,
@@ -516,6 +769,7 @@ def get_recommendations(
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
+    """Get recommendations. For parameter_driven projects, pass context as query params (feature column names = keys, chosen values = values). Works for any dataset."""
     db_project = get_project_for_user(project_id, current_user_id, db)
     if db_project.status != models.ProjectStatus.READY:
         raise HTTPException(status_code=400, detail=f"Project status is {db_project.status}.")
@@ -523,47 +777,57 @@ def get_recommendations(
          raise HTTPException(status_code=404, detail="Model not found in registry.")
 
     model_type = db_project.model_type
+    context = {}
+    if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        reserved = {"user_id", "item_title", "n"}
+        context = {k: v for k, v in request.query_params.items() if k not in reserved and v}
     if model_type == models.ModelType.CONTENT and not item_title:
         raise HTTPException(status_code=400, detail="item_title is required for this content-based model.")
-    if model_type == models.ModelType.COLLABORATIVE and not user_id:
+    elif model_type == models.ModelType.COLLABORATIVE and not user_id:
         raise HTTPException(status_code=400, detail="user_id is required for this collaborative model.")
-    if model_type == models.ModelType.HYBRID and (not user_id or not item_title):
-        raise HTTPException(status_code=400, detail="user_id and item_title are required for this hybrid model.")
+    # parameter_driven and hybrid: either context (filter by) or item_title (recommend similar to this item) or both
 
     try:
-        # Load from local project_models directory (file URI for Windows compatibility).
         local_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
         if not os.path.isdir(local_model_path):
             raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
         model_uri = _path_to_file_uri(local_model_path)
         print(f"Loading model from: {local_model_path}")
-        print(f"Project details: {db_project.project_name} (ID: {db_project.id})")
-        print(f"Model type: {model_type}, User ID: {user_id}, Item title: {item_title}")
+        print(f"Model type: {model_type}, user_id: {user_id}, item_title: {item_title}, context: {context if model_type == models.ModelType.PARAMETER_DRIVEN else 'N/A'}")
 
         model = mlflow.pyfunc.load_model(model_uri)
         print("Model loaded successfully")
-        
-        model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
+
+        if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+            row = {**context, "n": n}
+            if item_title:
+                row["item_title"] = item_title
+            model_input = pd.DataFrame([row])
+        else:
+            model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
         print(f"Model input: {model_input.to_dict('records')}")
-        
+
         result_json = model.predict(model_input)[0]
-        print(f"Raw prediction result: {result_json}")
-        
         result = json.loads(result_json)
-        print(f"Parsed result: {result}")
-        
+
         if result.get("error"):
             raise ValueError(result["error"])
-            
+
+        recs = result.get("recommendations")
+        if recs is not None and not isinstance(recs, list):
+            recs = []
+        if recs is None:
+            recs = []
+
         return schemas.RecommendationResponse(
-            input_item_title=item_title,
-            input_user_id=user_id,
+            input_item_title=item_title if model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID) else None,
+            input_user_id=user_id if model_type == models.ModelType.COLLABORATIVE else None,
             model_type=model_type,
-            recommendations=result["recommendations"]
+            recommendations=recs
         )
-        
-    except ValueError as e: 
-        raise HTTPException(status_code=404, detail=str(e))
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"Error loading model or predicting: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating recommendations: {e}")
