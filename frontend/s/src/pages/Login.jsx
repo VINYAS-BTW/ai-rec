@@ -89,7 +89,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-6 py-3.5 font-semibold rounded-xl bg-gradient-to-r from-cyan-600 via-cyan-800 to-cyan-600 hover:from-cyan-800 hover:via-cyan-600 hover:to-cyan-800 text-white shadow-lg shadow-cyan-500/30 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full px-6 py-3.5 font-semibold rounded-xl bg-gradient-to-br from-rose-600 via-rose-800 to-rose-600 hover:from-rose-800 hover:via-rose-600 hover:to-rose-800 text-white  transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading ? (
                 <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin font-third" />
@@ -113,7 +113,7 @@ export default function Login() {
     <img
       src="https://www.svgrepo.com/show/475656/google-color.svg"
       alt="google"
-      className="w-5 h-5"
+      className="w-5 h-5 font-third"
     />
     Continue with Google
   </a>
@@ -122,7 +122,7 @@ export default function Login() {
 
           <p className="mt-6 text-center text-sm text-gray-600">
             Don&apos;t have an account?{" "}
-            <Link to="/signup" className="font-semibold text-cyan-600 hover:text-cyan-800">
+            <Link to="/signup" className="font-semibold text-rose-600 hover:text-rose-800">
               Sign up
             </Link>
           </p>
