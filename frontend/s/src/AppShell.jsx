@@ -1569,7 +1569,7 @@ export default function AppShell() {
           initial={{ x: -280 }}
           animate={{ x: 0 }}
           transition={{ duration: 0.5, type: "tween" }}
-          className={`fixed left-0 top-0 bg-white border-r rounded-r-3xl border-gray-200 flex flex-col shadow-3xl h-screen transition-all duration-500 z-50 ${
+          className={`fixed left-0 top-0 bg-white border-r rounded-r-4xl border-gray-200 flex flex-col shadow-3xl h-screen transition-all duration-500 z-50 ${
             isSidebarOpen ? "w-[280px]" : "w-[72px]"
           }`}
           onMouseEnter={() => !isSidebarOpen && setIsSidebarOpen(true)}
