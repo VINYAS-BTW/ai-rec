@@ -111,6 +111,26 @@ export default function Signup() {
             </button>
           </form>
 
+          <div className="mt-6">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-200"></div>
+              <span className="text-xs text-gray-400 font-medium">OR</span>
+              <div className="flex-1 h-px bg-gray-200"></div>
+            </div>
+
+            <a
+              href={`${API_AUTH}/auth/google`}
+              className="mt-5 w-full flex items-center justify-center gap-3 px-6 py-3.5 border border-gray-200 rounded-xl font-semibold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+            >
+              <img
+                src="https://www.svgrepo.com/show/475656/google-color.svg"
+                alt="google"
+                className="w-5 h-5 font-third"
+              />
+              Continue with Google
+            </a>
+          </div>
+
           <p className="mt-6 text-center text-sm text-gray-600">
             Already have an account?{" "}
             <Link to="/login" className="font-semibold text-cyan-600 hover:text-cyan-800">

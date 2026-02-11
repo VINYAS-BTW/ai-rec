@@ -19,11 +19,12 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
+  Menu,
+  X,
 } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import { toast } from "react-toastify";
 import { API_BACKEND, API_WEBHOOK, getBackendAuthHeaders } from "./api";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 
 const NAV_ITEMS = [
   {
@@ -1516,6 +1517,13 @@ export default function AppShell() {
   const summary = useDashboardSummary();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  const handleNavClick = (tabId) => {
+    setActiveTab(tabId);
+    if (typeof window !== "undefined" && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
+
   const handleLogout = () => {
     logout();
     toast.success("Signed out");
@@ -1564,20 +1572,44 @@ export default function AppShell() {
         }
       `}</style>
 
-      <div className="flex min-h-screen">
+      {/* Mobile top bar with hamburger */}
+      <div className="md:hidden flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-30">
+        <button
+          type="button"
+          onClick={() => setIsSidebarOpen(true)}
+          className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-rose-600 text-white shadow-md"
+          aria-label="Open sidebar"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <span className="text-sm font-semibold font-main text-gray-800">
+          AiREC BaaS Studio
+        </span>
+      </div>
+
+      {/* Backdrop for mobile when sidebar open */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 md:hidden z-40"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      <div className="flex flex-col md:flex-row min-h-screen">
         <motion.aside
           initial={{ x: -280 }}
           animate={{ x: 0 }}
           transition={{ duration: 0.5, type: "tween" }}
-          className={`fixed left-0 top-0 bg-white border-r rounded-r-4xl border-gray-200 flex flex-col shadow-3xl h-screen transition-all duration-500 z-50 ${
-            isSidebarOpen ? "w-[280px]" : "w-[72px]"
-          }`}
-          onMouseEnter={() => !isSidebarOpen && setIsSidebarOpen(true)}
-          onMouseLeave={() => isSidebarOpen && setIsSidebarOpen(false)}
+          className={`bg-white border-r rounded-r-4xl border-gray-200 flex flex-col shadow-3xl transition-all duration-500 z-50 w-full transform ${
+            isSidebarOpen
+              ? "translate-x-0 md:w-[280px]"
+              : "-translate-x-full md:translate-x-0 md:w-[72px]"
+          } fixed left-0 top-0 h-screen`}
         >
           <div className="h-full flex flex-col">
-            <div className="px-3 py-6 border-b rounded-b-3xl border-gray-200 flex-shrink-0 bg-rose-50 shadow-sm">
-              <div className="flex items-center gap-3">
+            <div className="px-3 py-4 border-b rounded-b-3xl border-gray-200 flex-shrink-0 bg-rose-50 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
                 <motion.div
                   whileHover={{ rotate: 0 }}
                   transition={{ duration: 0.1 }}
@@ -1585,18 +1617,28 @@ export default function AppShell() {
                 >
                   <Layers className="w-6 h-6 text-white" />
                 </motion.div>
-                <AnimatePresence>
-                  {isSidebarOpen && (
-                    <motion.h1
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -10 }}
-                      className="text-xl font-bold font-main text-gray-900 whitespace-nowrap"
-                    >
-                      BaaS Studio
-                    </motion.h1>
-                  )}
-                </AnimatePresence>
+                  <AnimatePresence>
+                    {isSidebarOpen && (
+                      <motion.h1
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -10 }}
+                        className="text-xl font-bold font-main text-gray-900 whitespace-nowrap"
+                      >
+                        BaaS Studio
+                      </motion.h1>
+                    )}
+                  </AnimatePresence>
+                </div>
+                {/* Close button on mobile */}
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarOpen(false)}
+                  className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white text-gray-700 shadow-sm border border-gray-200"
+                  aria-label="Close sidebar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
             </div>
 
@@ -1611,7 +1653,7 @@ export default function AppShell() {
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.01, duration: 0.1 }}
-                      onClick={() => setActiveTab(item.id)}
+                      onClick={() => handleNavClick(item.id)}
                       whileHover={{ scale: 1.02, x: 0 }}
                       whileTap={{ scale: 0.98 }}
                       className="group w-full flex items-center gap-3 px-0 py-3.5 rounded-2xl hover:border-t-1 hover:border-rose-500 transition-all duration-300 cursor-pointer"
@@ -1695,8 +1737,8 @@ export default function AppShell() {
         </motion.aside>
 
         <main
-          className={`flex-1 overflow-y-auto transition-all duration-500 ${
-            isSidebarOpen ? "ml-[280px]" : "ml-[72px]"
+          className={`flex-1 overflow-y-auto transition-all duration-500 ml-0 ${
+            isSidebarOpen ? "md:ml-[280px]" : "md:ml-[72px]"
           }`}
         >
           <AnimatePresence mode="wait">
