@@ -323,6 +323,7 @@ export default function Home() {
             <h2 className="font-main text-4xl sm:text-5xl md:text-6xl font-bold text-gray-900 mb-6 mt-3">
               From zero to production in three steps
             </h2>
+             
             
           </div>
 
@@ -357,6 +358,7 @@ export default function Home() {
                 </ul>
               </div>
             </div>
+            
 
             {/* Step 2 */}
             <div className="step-card relative group">
@@ -752,12 +754,12 @@ recommendations = response.json()
             </div>
 
             <div>
-              <h4 className="font-main text-sm font-bold text-white mb-4 uppercase tracking-wider">Company</h4>
+              <h4 className="font-main text-sm font-bold text-white mb-4 uppercase tracking-wider">People </h4>
               <ul className="space-y-3">
-                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">About</a></li>
-                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Blog</a></li>
-                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Careers</a></li>
-                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Contact</a></li>
+                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Rohit R Bhat</a></li>
+                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Sai Vinyas BS</a></li>
+                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Saiyam Jn</a></li>
+                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Sourabh Katti</a></li>
               </ul>
             </div>
 
@@ -767,7 +769,7 @@ recommendations = response.json()
                 <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Privacy Policy</a></li>
                 <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Terms of Service</a></li>
                 <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">Security</a></li>
-                <li><a href="#" className="font-sec text-sm text-gray-400 hover:text-white transition-colors">GDPR</a></li>
+                
               </ul>
             </div>
           </div>
