@@ -1352,19 +1352,34 @@ function RecommenderPanel() {
                               >
                                 
                               </motion.div>
-                              <h3 className="text-xl font-bold text-gray-900 font-main">
-                                Top Recommendations
+                              <h3 className="text-2xl font-bold text-gray-900 font-main">
+                                Top Recommendations  <h2 className="text-sm  text-gray-400 font-third"> Based on your input</h2>
                               </h3>
                             </div>
                             <div className="space-y-3">
                               {(() => {
-                                const list = Array.isArray(recommendations) ? recommendations : [];
+                                const list = Array.isArray(recommendations)
+                                  ? recommendations
+                                  : [];
                                 const valid = list.filter((rec) => {
                                   if (!rec || typeof rec !== "object") return false;
                                   const isParamDriven = "value" in rec;
-                                  const v = isParamDriven ? rec.value : (rec.title ?? rec.item_title ?? rec.id ?? rec.item_id ?? "");
-                                  const s = String(v ?? "").trim().toLowerCase();
-                                  return s.length > 0 && s !== "nan" && s !== "none" && s !== "null";
+                                  const v = isParamDriven
+                                    ? rec.value
+                                    : rec.title ??
+                                      rec.item_title ??
+                                      rec.id ??
+                                      rec.item_id ??
+                                      "";
+                                  const s = String(v ?? "")
+                                    .trim()
+                                    .toLowerCase();
+                                  return (
+                                    s.length > 0 &&
+                                    s !== "nan" &&
+                                    s !== "none" &&
+                                    s !== "null"
+                                  );
                                 });
                                 if (valid.length === 0) {
                                   return (
@@ -1377,40 +1392,58 @@ function RecommenderPanel() {
                                 }
                                 return (
                                   <>
-                                    <p className="text-xs text-slate-500 font-third mb-2">Showing {valid.length} recommendation{valid.length !== 1 ? "s" : ""}</p>
+                                    <p className="text-xs text-slate-500 font-third mb-2">
+                                      Showing {valid.length} recommendation
+                                      {valid.length !== 1 ? "s" : ""}
+                                    </p>
                                     {valid.map((rec, index) => {
-                                  const isParamDriven = "value" in rec && "score" in rec;
-                                  const displayText = isParamDriven
-                                    ? rec.value
-                                    : (rec.title ?? rec.item_title ?? (rec.id != null ? `ID: ${rec.id}` : rec.item_id != null ? `ID: ${rec.item_id}` : JSON.stringify(rec)));
-                                  const scoreNum = isParamDriven && rec.score != null ? Number(rec.score) : null;
-                                  return (
-                                    <motion.div
-                                      key={index}
-                                      initial={{ opacity: 0, x: -20 }}
-                                      animate={{ opacity: 1, x: 0 }}
-                                      transition={{ delay: index * 0.05, duration: 0.3 }}
-                                      whileHover={{ scale: 1.00, x: 0 }}
-                                      className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
-                                    >
-                                      <div className="flex items-center justify-between gap-4">
-                                        <div className="flex items-center space-x-4 min-w-0">
-                                          <span className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0">
-                                            {index + 1}
-                                          </span>
-                                          <p className="text-gray-900 font-semibold font-third truncate">
-                                            {displayText}
-                                          </p>
-                                        </div>
-                                        {scoreNum != null && !Number.isNaN(scoreNum) && (
-                                          <span className="text-xs text-slate-400 font-third flex-shrink-0">
-                                            match {Math.round(scoreNum * 100)}%
-                                          </span>
-                                        )}
-                                      </div>
-                                    </motion.div>
-                                  );
-                                })}
+                                      const isParamDriven =
+                                        "value" in rec && "score" in rec;
+                                      const displayText = isParamDriven
+                                        ? rec.value
+                                        : rec.title ??
+                                          rec.item_title ??
+                                          (rec.id != null
+                                            ? `ID: ${rec.id}`
+                                            : rec.item_id != null
+                                            ? `ID: ${rec.item_id}`
+                                            : JSON.stringify(rec));
+                                      const scoreNum =
+                                        isParamDriven && rec.score != null
+                                          ? Number(rec.score)
+                                          : null;
+                                      return (
+                                        <motion.div
+                                          key={index}
+                                          initial={{ opacity: 0, x: -20 }}
+                                          animate={{ opacity: 1, x: 0 }}
+                                          transition={{
+                                            delay: index * 0.05,
+                                            duration: 0.3,
+                                          }}
+                                          whileHover={{ scale: 1.0, x: 0 }}
+                                          className="p-5 bg-gradient-to-r from-white via-emerald-50/30 to-teal-50/30 rounded-2xl border-2 border-slate-200 hover:border-cyan-300 transition-all duration-300 shadow-sm hover:shadow-md"
+                                        >
+                                          <div className="flex items-center justify-between gap-4">
+                                            <div className="flex items-center space-x-4 min-w-0">
+                                              <span className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0">
+                                                {index + 1}
+                                              </span>
+                                              <p className="text-gray-900 font-semibold font-third truncate">
+                                                {displayText}
+                                              </p>
+                                            </div>
+                                            {scoreNum != null &&
+                                              !Number.isNaN(scoreNum) && (
+                                                <span className="text-xs text-slate-400 font-third flex-shrink-0">
+                                                  match{" "}
+                                                  {Math.round(scoreNum * 100)}%
+                                                </span>
+                                              )}
+                                          </div>
+                                        </motion.div>
+                                      );
+                                    })}
                                   </>
                                 );
                               })()}
