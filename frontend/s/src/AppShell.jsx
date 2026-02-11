@@ -1515,7 +1515,14 @@ export default function AppShell() {
   const { logout } = useAuth();
   const navigate = useNavigate();
   const summary = useDashboardSummary();
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    // On mobile start open, on desktop start collapsed
+    return window.innerWidth < 768;
+  });
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false);
+
+  const showSidebarLabels = isSidebarOpen || isSidebarHovered;
 
   const handleNavClick = (tabId) => {
     setActiveTab(tabId);
@@ -1600,10 +1607,12 @@ export default function AppShell() {
           initial={{ x: -280 }}
           animate={{ x: 0 }}
           transition={{ duration: 0.5, type: "tween" }}
+          onMouseEnter={() => setIsSidebarHovered(true)}
+          onMouseLeave={() => setIsSidebarHovered(false)}
           className={`bg-white border-r rounded-r-4xl border-gray-200 flex flex-col shadow-3xl transition-all duration-500 z-50 w-full transform ${
-            isSidebarOpen
-              ? "translate-x-0 md:w-[280px]"
-              : "-translate-x-full md:translate-x-0 md:w-[72px]"
+            isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          } md:translate-x-0 ${
+            showSidebarLabels ? "md:w-[280px]" : "md:w-[72px]"
           } fixed left-0 top-0 h-screen`}
         >
           <div className="h-full flex flex-col">
@@ -1618,7 +1627,7 @@ export default function AppShell() {
                   <Layers className="w-6 h-6 text-white" />
                 </motion.div>
                   <AnimatePresence>
-                    {isSidebarOpen && (
+                    {showSidebarLabels && (
                       <motion.h1
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
@@ -1672,7 +1681,7 @@ export default function AppShell() {
                       </motion.span>
 
                       <AnimatePresence>
-                        {isSidebarOpen && (
+                        {showSidebarLabels && (
                           <motion.div
                             initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
@@ -1717,7 +1726,7 @@ export default function AppShell() {
                     <LogOut className="w-5 h-5 text-rose-700 group-hover:text-white transition-colors duration-300" />
                   </motion.span>
                   <AnimatePresence>
-                    {isSidebarOpen && (
+                    {showSidebarLabels && (
                       <motion.div
                         initial={{ opacity: 0, x: -10 }}
                         animate={{ opacity: 1, x: 0 }}
