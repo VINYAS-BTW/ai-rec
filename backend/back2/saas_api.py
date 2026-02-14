@@ -58,11 +58,16 @@ from datetime import datetime
 
 
 
+def _webhook_service_url():
+    return (os.getenv("WEBHOOK_SERVICE_URL") or "http://localhost:3001").rstrip("/")
+
+
 async def notify_webhooks(event_type: str, payload: dict):
     """Send event payload to all registered external apps via the Node webhook service."""
     try:
+        base = _webhook_service_url()
         async with httpx.AsyncClient() as client:
-            res = await client.get("http://localhost:3001/api/apps")
+            res = await client.get(f"{base}/api/apps")
             if res.status_code != 200:
                 print("⚠️ Could not fetch registered apps from webhook service")
                 return
