@@ -17,7 +17,7 @@ export default function OAuthSuccess() {
     } else {
       navigate("/login");
     }
-  }, []);
+  }, [navigate, loginSuccess]);
 
   return <p>Signing you in...</p>;
 }

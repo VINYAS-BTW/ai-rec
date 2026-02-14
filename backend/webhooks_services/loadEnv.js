@@ -8,4 +8,3 @@ const loaded = dotenv.config({ path: envPath, quiet: true });
 if (loaded.error && process.env.NODE_ENV !== "test") {
   console.warn("Webhook service: no .env file at", envPath, "- using process.env / defaults");
 }
-dotenv.config({ path: path.join(__dirname, ".ENV"), quiet: true });

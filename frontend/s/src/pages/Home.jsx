@@ -182,7 +182,7 @@ export default function Home() {
               </button>
               <button
                 onClick={() => navigate(primaryTarget)}
-                className="font-sec px-6 py-2.5 rounded-full text-sm font-semibold bg-gradient-to-br from-rose-900 to-cyan-900 text-white  transition-all duration-300 shaow-lg cursor-pointer hover:bg-gradient-to-br hover:from rose-700 hover:to-cyan-700"
+                className="font-sec px-6 py-2.5 rounded-full text-sm font-semibold bg-gradient-to-br from-rose-900 to-cyan-900 text-white transition-all duration-300 shadow-lg cursor-pointer hover:bg-gradient-to-br hover:from-rose-700 hover:to-cyan-700"
               >
                 {primaryLabel}
               </button>
@@ -293,7 +293,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6">
               <button
                 onClick={() => navigate(primaryTarget)}
-                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-full text-lg font-bold bg-gradient-to-r from-rose-900 to-cyan-600 text-white  duration-300 flex items-center justify-center gap-3 cursor-pointer hover:shadow-lg shaow-white"
+                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-full text-lg font-bold bg-gradient-to-r from-rose-900 to-cyan-600 text-white duration-300 flex items-center justify-center gap-3 cursor-pointer hover:shadow-lg shadow-white"
               >
               
                 <span>{primaryLabel}</span>

@@ -27,7 +27,8 @@ router.post("/", async (req, res) => {
     }
     console.log("✅ API key valid for app:", app.app_name);
 
-    const fastapiUrl = `http://localhost:8000/project/${project_id}/recommendations`;
+    const baseUrl = process.env.FASTAPI_URL || "http://localhost:8000";
+    const fastapiUrl = `${baseUrl.replace(/\/$/, "")}/project/${project_id}/recommendations`;
     const params = { n: 10 };
     if (item_title) params.item_title = item_title;
     if (user_id) params.user_id = user_id;

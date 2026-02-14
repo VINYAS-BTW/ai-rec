@@ -47,3 +47,5 @@ mlflow_artifacts/
 backend/back2/user_uploads/
 backend/back2/project_models/*
 backend/back2/__pycache__/*
+
+DEPLOY_UBUNTU.md

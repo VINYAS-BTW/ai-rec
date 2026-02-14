@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import axios from "axios";
 import * as User from "../models/user.js";
 
 export const signup = async (req, res) => {
@@ -68,9 +69,6 @@ export const login = async (req, res) => {
 
 export const googleLogin = (req, res) => {
   const redirect_uri = "http://localhost:8080/auth/google/callback";
-  console.log("Redirect URI:", redirect_uri);
-
-
   const url =
     "https://accounts.google.com/o/oauth2/v2/auth" +
     `?client_id=${process.env.GOOGLE_CLIENT_ID}` +
@@ -82,7 +80,6 @@ export const googleLogin = (req, res) => {
   res.redirect(url);
 };
 
-import axios from "axios";
 export const googleCallback = async (req, res) => {
   try {
     
