@@ -1,6 +1,7 @@
 import "./loadEnv.js";
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import bodyParser from "body-parser";
 import { db, ready } from "./db/index.js";
 import webhookRoutes from "./routes/webhooks.js";
@@ -9,6 +10,29 @@ import recommendRoutes from "./routes/recommend.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Rate limiters: recommend is stricter (per-min), apps/webhooks per 15 min
+const recommendLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.RECOMMEND_RATE_LIMIT_MAX ?? "60", 10),
+  message: { error: "Too many requests; try again in a minute." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const apiAppsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.API_APPS_RATE_LIMIT_MAX ?? "100", 10),
+  message: { error: "Too many requests; try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const apiWebhooksLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: parseInt(process.env.API_WEBHOOKS_RATE_LIMIT_MAX ?? "50", 10),
+  message: { error: "Too many requests; try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Prevent process from exiting on unhandled errors (log instead)
 process.on("unhandledRejection", (reason, promise) => {
@@ -41,9 +65,9 @@ app.use(
 );
 app.use(bodyParser.json());
 
-app.use("/api/webhooks", webhookRoutes);
-app.use("/api/apps", appRoutes);
-app.use("/api/recommend", recommendRoutes);
+app.use("/api/webhooks", apiWebhooksLimiter, webhookRoutes);
+app.use("/api/apps", apiAppsLimiter, appRoutes);
+app.use("/api/recommend", recommendLimiter, recommendRoutes);
 
 app.get("/", (req, res) => res.send("Webhook service running 🚀"));
 app.get("/health", (req, res) => res.json({ ok: true, service: "webhooks" }));
