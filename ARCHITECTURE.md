@@ -156,17 +156,4 @@ Files are stored on disk under `backend/back2/user_uploads/`. MLflow stores arti
 
 ---
 
-## 8. Summary Diagram (Data Flow)
 
-```
-[User] → Login (Auth) → Dashboard
-                ↓
-         Create Project (FastAPI) → DB recommender_projects, uploaded_files
-                ↓
-         Background Train → MLflow register → project status READY
-                ↓
-         Recommend: Dashboard → FastAPI /project/{id}/recommendations
-         OR External Client → Webhooks /api/recommend (x-api-key) → FastAPI same endpoint → response (+ optional webhook POST)
-```
-
-This is the complete flow of the system design and architecture.
