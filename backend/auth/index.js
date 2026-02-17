@@ -3,7 +3,6 @@ import "./loadEnv.js";
 
 import express from "express";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
 import bodyParser from "body-parser";
 import { connectDB } from "./db/index.js";
 import AuthRoute from "./routes/AuthRoute.js";
@@ -13,15 +12,6 @@ await connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-
-// Rate limit auth (login, signup, OAuth) to reduce brute-force and abuse
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? "50", 10),
-  message: { success: false, message: "Too many attempts; try again later." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 // Explicit origins so browser gets a concrete Access-Control-Allow-Origin (avoids CORS errors)
 const allowedOrigins = [
@@ -46,7 +36,7 @@ app.use(
 );
 app.use(bodyParser.json());
 
-app.use("/auth", authLimiter, AuthRoute);
+app.use("/auth", AuthRoute);
 
 app.get("/", (req, res) => res.send("pong"));
 
