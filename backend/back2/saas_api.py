@@ -15,6 +15,9 @@ import jwt
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
@@ -114,6 +117,13 @@ async def lifespan(app: FastAPI):
     print("Server shutting down.")
 
 app = FastAPI(lifespan=lifespan)
+
+# Rate limiting: default 100/min per IP; override on expensive routes
+_rate_limit_default = os.getenv("RATE_LIMIT_DEFAULT", "100/minute")
+limiter = Limiter(key_func=get_remote_address, default_limits=[_rate_limit_default])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 _cors_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -472,7 +482,9 @@ async def process_project(project_id: int, db: Session):
         db.close()
 
 @app.post("/create-project/", response_model=schemas.RecommenderProject)
+@limiter.limit(os.getenv("RATE_LIMIT_CREATE_PROJECT", "10/minute"))
 async def create_project(
+    request: Request,
     background_tasks: BackgroundTasks,
     current_user_id: int = Depends(get_current_user_id),
     project_name: str = Form(...),
@@ -535,7 +547,9 @@ async def create_project(
 
 
 @app.post("/project/{project_id}/retrain")
+@limiter.limit(os.getenv("RATE_LIMIT_RETRAIN", "10/minute"))
 def retrain_project(
+    request: Request,
     project_id: int,
     background_tasks: BackgroundTasks,
     current_user_id: int = Depends(get_current_user_id),
