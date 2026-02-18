@@ -154,5 +154,3 @@ export const googleCallback = async (req, res) => {
     res.redirect(`${frontendUrl}/login`);
   }
 }
-
-};
