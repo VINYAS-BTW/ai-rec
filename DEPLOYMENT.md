@@ -389,3 +389,92 @@ Note: port forwarding is on your router; the server firewall only needs to allow
 - In frontend `.env.production`, set the `VITE_*` URLs to `https://yourdomain.com` (and configure nginx with SSL, e.g. Certbot).
 
 You’re done. For a quick test, open **http://203.192.243.34:1405** (or 1406) and log in; the app will call auth (1402), webhooks (1404), and ML (1403) via the built-in URLs.
+
+---
+
+## 15. Troubleshooting: "Connection timed out"
+
+If the browser or `curl` shows **connection timed out** when opening `http://203.192.243.34:1405` (or 1402/1403/1404), the request is not reaching the server. Work through these checks.
+
+### A. On the server – check that apps are listening
+
+SSH in and run:
+
+```bash
+# List what's listening on your app ports (should show 0.0.0.0:PORT or :::PORT)
+ss -tlnp | grep -E '5173|8080|8000|3001'
+```
+
+You want to see lines like:
+- `0.0.0.0:5173` or `:::5173` (frontend)
+- `0.0.0.0:8080` (auth)
+- `0.0.0.0:8000` (back2)
+- `0.0.0.0:3001` (webhooks)
+
+If a port is missing, that service isn’t running or is bound only to `127.0.0.1`. Start it with PM2 or run it manually with `--host 0.0.0.0` (or equivalent).
+
+**Quick local test on the server:**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080
+```
+
+If these return `200` or `304`, the apps are fine; the problem is network or firewall.
+
+### B. Server firewall (UFW)
+
+If UFW is active, it must allow the **internal** ports (the ones the app listens on), not the external router ports:
+
+```bash
+sudo ufw status
+```
+
+If `Status: active`, ensure you have:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 8080/tcp
+sudo ufw allow 8000/tcp
+sudo ufw allow 3001/tcp
+sudo ufw allow 5173/tcp
+sudo ufw allow 80/tcp
+sudo ufw reload
+```
+
+Then test again from your PC.
+
+### C. Router port forwarding
+
+Port forwarding must send **external port → server’s LAN IP and internal port**:
+
+| External (router) | Forward to (server on LAN) |
+|-------------------|----------------------------|
+| 1401 | `SERVER_LAN_IP:22` |
+| 1402 | `SERVER_LAN_IP:8080` |
+| 1403 | `SERVER_LAN_IP:8000` |
+| 1404 | `SERVER_LAN_IP:3001` |
+| 1405 | `SERVER_LAN_IP:5173` |
+| 1406 | `SERVER_LAN_IP:80` |
+
+- Find the server’s LAN IP on the server: `hostname -I | awk '{print $1}'` or `ip addr`.
+- In the router admin, set each rule to this IP and the **internal** port (e.g. 1405 → `192.168.x.x:5173`).
+- Save and reboot the router if needed. Some routers have a separate "firewall" that can block forwarded ports; temporarily disable it to test.
+
+### D. Test from your PC
+
+From Windows (PowerShell) or another machine **outside** your LAN (e.g. phone on mobile data):
+
+```powershell
+# Replace 1405 with 1402, 1403, 1404 as needed
+curl -v --connect-timeout 5 http://203.192.243.34:1405
+```
+
+- **Connection timed out** → traffic is not reaching the server (router forwarding, ISP, or server firewall).
+- **Connection refused** → something reached the server but nothing is listening on that port (check A).
+- **HTTP response** → forwarding and server are OK; if the app still fails, it’s CORS or app config.
+
+### E. Which IP to use
+
+- Use **203.192.243.34** (your public IP from `curl ifconfig.me`) for browser and API calls from outside.
+- Use **122.166.250.176** only if that’s the IP you get when you run `curl ifconfig.me` **from the server**; otherwise stick to 203.192.243.34 for external access.
