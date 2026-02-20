@@ -5,6 +5,7 @@ import numpy as np
 import pickle
 import json
 import os
+from scipy.sparse import issparse, load_npz
 
 # --- Import your recommender classes ---
 from Content import ContentBasedRecommender
@@ -69,7 +70,8 @@ class MLflowRecommenderWrapper(mlflow.pyfunc.PythonModel):
             self.model._numeric_means = num_df.mean().to_dict() if not num_df.empty else {}
             with open(context.artifacts["pd_transformer"], "rb") as f:
                 self.model.column_transformer = pickle.load(f)
-            self.model.feature_matrix_ = np.load(context.artifacts["pd_feature_matrix"])
+            _path = context.artifacts["pd_feature_matrix"]
+            self.model.feature_matrix_ = load_npz(_path) if _path.endswith(".npz") else np.load(_path)
             print("✅ Model loading complete.")
             return
 
@@ -111,7 +113,8 @@ class MLflowRecommenderWrapper(mlflow.pyfunc.PythonModel):
             self.model._numeric_means = num_df.mean().to_dict() if not num_df.empty else {}
             with open(context.artifacts["pd_transformer"], "rb") as f:
                 self.model.column_transformer = pickle.load(f)
-            self.model.feature_matrix_ = np.load(context.artifacts["pd_feature_matrix"])
+            _path = context.artifacts["pd_feature_matrix"]
+            self.model.feature_matrix_ = load_npz(_path) if _path.endswith(".npz") else np.load(_path)
             print("✅ Model loading complete.")
             return
 

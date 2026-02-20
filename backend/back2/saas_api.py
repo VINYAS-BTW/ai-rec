@@ -11,6 +11,7 @@ import pickle
 import shutil
 import numpy as np
 import tempfile
+from scipy.sparse import issparse, save_npz
 import jwt
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -327,11 +328,15 @@ async def process_project(project_id: int, db: Session):
                 pd_recommender = ParameterDrivenRecommender()
                 pd_recommender.fit(df_content, content_schema)
                 artifacts["pd_transformer"] = os.path.join(tmpdir, "pd_transformer.pkl")
-                artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                if issparse(pd_recommender.feature_matrix_):
+                    artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npz")
+                    save_npz(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
+                else:
+                    artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                    np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
                 artifacts["pd_data"] = os.path.join(tmpdir, "pd_data.csv")
                 with open(artifacts["pd_transformer"], "wb") as f:
                     pickle.dump(pd_recommender.column_transformer, f)
-                np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
                 pd_recommender.df.to_csv(artifacts["pd_data"], index=False)
                 print(f"[Task {project_id}]: Saved Parameter-driven model artifacts.")
 
@@ -391,11 +396,15 @@ async def process_project(project_id: int, db: Session):
                 pd_recommender = ParameterDrivenRecommender()
                 pd_recommender.fit(df_joined, hybrid_schema)
                 artifacts["pd_transformer"] = os.path.join(tmpdir, "pd_transformer.pkl")
-                artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                if issparse(pd_recommender.feature_matrix_):
+                    artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npz")
+                    save_npz(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
+                else:
+                    artifacts["pd_feature_matrix"] = os.path.join(tmpdir, "pd_feature_matrix.npy")
+                    np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
                 artifacts["pd_data"] = os.path.join(tmpdir, "pd_data.csv")
                 with open(artifacts["pd_transformer"], "wb") as f:
                     pickle.dump(pd_recommender.column_transformer, f)
-                np.save(artifacts["pd_feature_matrix"], pd_recommender.feature_matrix_)
                 pd_recommender.df.to_csv(artifacts["pd_data"], index=False)
                 artifacts["cb_data"] = os.path.join(tmpdir, "cb_data.csv")
                 df_joined.to_csv(artifacts["cb_data"], index=False)

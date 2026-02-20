@@ -13,7 +13,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from scipy.sparse import issparse
+from scipy.sparse import issparse, csr_matrix
 
 
 class ParameterDrivenRecommender:
@@ -113,12 +113,12 @@ class ParameterDrivenRecommender:
             if col in fit_df.columns:
                 fit_df[col] = fit_df[col].astype(str).fillna("")
         self.feature_matrix_ = self.column_transformer.fit_transform(fit_df)
+        # Keep sparse matrix to avoid huge memory use (e.g. 100k x 11k one-hot -> 8.5GB dense).
         if issparse(self.feature_matrix_):
-            self.feature_matrix_ = np.asarray(self.feature_matrix_.astype(np.float64).toarray())
+            self.feature_matrix_ = csr_matrix(self.feature_matrix_, dtype=np.float64)
         else:
-            self.feature_matrix_ = np.asarray(self.feature_matrix_, dtype=np.float64)
-        # NaN from StandardScaler (constant columns) -> 0
-        self.feature_matrix_ = np.nan_to_num(self.feature_matrix_, nan=0.0, posinf=0.0, neginf=0.0)
+            self.feature_matrix_ = np.asarray(self.feature_matrix_, dtype=np.float32)
+            self.feature_matrix_ = np.nan_to_num(self.feature_matrix_, nan=0.0, posinf=0.0, neginf=0.0)
         # Store column means so we can use them as neutral values when user doesn't specify a column
         for col in self._numeric_cols:
             if col in fit_df.columns:
