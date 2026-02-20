@@ -139,7 +139,7 @@ export default function Home() {
     <div className="min-h-screen bg-white overflow-x-hidden">
    
       <nav
-        className={`fixed top-2 left-4 right-4 z-50 transition-all duration-300 rounded-full ${
+        className={`fixed top-2 left-4 right-4 z-50 transition-all duration-300 rounded-3xl ${
           scrolled
             ? "bg-rose-50/1 backdrop-blur-2xl border-b border-gray-200 shadow-lg"
             : "bg-transparent"
@@ -182,7 +182,7 @@ export default function Home() {
               </button>
               <button
                 onClick={() => navigate(primaryTarget)}
-                className="font-sec px-6 py-2.5 rounded-full text-sm font-semibold bg-gradient-to-br from-rose-900 to-cyan-900 text-white transition-all duration-300 shadow-lg cursor-pointer hover:bg-gradient-to-br hover:from-rose-700 hover:to-cyan-700"
+                className="font-sec px-6 py-2.5 rounded-full text-sm font-semibold bg-gradient-to-br from-rose-900  via-neutral-900 to-cyan-900 text-white transition-all duration-300 shadow-lg cursor-pointer hover:bg-gradient-to-br hover:from-rose-700 hover:to-cyan-700"
               >
                 {primaryLabel}
               </button>
@@ -227,7 +227,7 @@ export default function Home() {
                     navigate(primaryTarget);
                     setMobileMenuOpen(false);
                   }}
-                  className="font-sec w-full px-6 py-3 rounded-xl text-sm font-semibold bg-gradient-to-r from-rose-500 to-cyan-500 text-white "
+                  className="font-sec w-full px-6 py-3 rounded-xl text-sm font-semibold bg-gradient-to-br from-rose-900 via-neutral-900 to-cyan-900 text-white "
                 >
                   {primaryLabel}
                 </button>
@@ -242,7 +242,7 @@ export default function Home() {
        
         <div className="absolute inset-0 z-0 opacity-30">
           <Beams
-            beamWidth={3}
+            beamWidth={2}
             beamHeight={30}
             beamNumber={20}
             lightColor="#ffffff"
@@ -254,7 +254,7 @@ export default function Home() {
         </div>
 
         {/* Gradient Overlays */}
-        <div className="absolute inset-0 bg-gradient-to-b from-rose-500/10 to-white z-0" />
+        <div className="absolute inset-0 bg-gradient-to-b from-rose-900/20 to-white z-0" />
      
 
         <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -293,7 +293,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-6">
               <button
                 onClick={() => navigate(primaryTarget)}
-                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-full text-lg font-bold bg-gradient-to-r from-rose-900 to-cyan-600 text-white duration-300 flex items-center justify-center gap-3 cursor-pointer hover:shadow-lg shadow-white"
+                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-full text-lg font-bold bg-gradient-to-br from-rose-900 via-neutral-950 to-cyan-900 text-white duration-300 flex items-center justify-center gap-3 cursor-pointer hover:shadow-lg shadow-white"
               >
               
                 <span>{primaryLabel}</span>
@@ -301,7 +301,7 @@ export default function Home() {
               </button>
               <button
                 onClick={() => navigate("/login")}
-                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-2xl text-lg font-bold border-2 border-gray-300 text-gray-800 hover:border-rose-400 hover:text-gray-900 bg-white/90 backdrop-blur-sm transition-all duration-300 flex items-center justify-center gap-3 cursor-pointer"
+                className="hero-cta font-sec group w-full sm:w-auto px-10 py-5 rounded-full text-lg font-bold border-2 border-cyan-900 text-gray-800 hover:border-rose-400 hover:text-gray-900 bg-white/90 backdrop-blur-sm transition-all duration-300 flex items-center justify-center gap-3 cursor-pointer"
               >
                 <Play className="w-5 h-5" />
                 <span>Watch demo</span>
@@ -320,7 +320,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-20">
             <span className="font-third text-sm font-semibold text-rose-800 uppercase tracking-wider">Workflow</span>
-            <h2 className="font-main text-4xl sm:text-5xl md:text-6xl font-bold text-gray-900 mb-6 mt-3">
+            <h2 className="font-main text-4xl sm:text-4xl md:text-6xl font-bold text-gray-900 mb-6 mt-3">
               From zero to production in three steps
             </h2>
              
@@ -331,7 +331,7 @@ export default function Home() {
             {/* Step 1 */}
             <div className="step-card relative group">
               <div className="absolute -inset-4 bg-gradient-to-br from-rose-500 to-rose-600 rounded-3xl blur-2xl opacity-0  transition-opacity duration-500" />
-              <div className="relative bg-white rounded-3xl p-10 shadow-xl border-2 border-gray-100  transition-all duration-300 h-full">
+              <div className="relative bg-white rounded-3xl p-10  border-1 border-rose-50  transition-all duration-300 h-full">
                 <div className="flex items-center gap-4 mb-6">
                  
                   <Database className="w-6 h-6 text-rose-500" />
@@ -363,7 +363,7 @@ export default function Home() {
             {/* Step 2 */}
             <div className="step-card relative group">
               <div className="absolute -inset-4 bg-gradient-to-br from-rose-500 via-rose-400 to-cyan-400 rounded-3xl blur-2xl opacity-0  transition-opacity duration-500" />
-              <div className="relative bg-white rounded-3xl p-10 shadow-xl border-2 border-gray-100 transition-all duration-300 h-full">
+              <div className="relative bg-white rounded-3xl p-10 border-1 border-rose-50 transition-all duration-300 h-full">
                 <div className="flex items-center gap-4 mb-6">
                  
                   <Sparkles className="w-6 h-6 text-rose-500" />
@@ -394,7 +394,7 @@ export default function Home() {
             {/* Step 3 */}
             <div className="step-card relative group">
               <div className="absolute -inset-4 bg-gradient-to-br from-cyan-500 to-cyan-600 rounded-3xl blur-2xl opacity-0 group-hover:opacity-20 transition-opacity duration-500" />
-              <div className="relative bg-white rounded-3xl p-10 shadow-xl border-2 border-gray-100 hover:border-cyan-200 transition-all duration-300 h-full">
+              <div className="relative bg-white rounded-3xl p-10 border-1 border-rose-50 hover:border-cyan-200 transition-all duration-300 h-full">
                 <div className="flex items-center gap-4 mb-6">
                   
                   <Webhook className="w-6 h-6 text-rose-500" />
@@ -429,7 +429,7 @@ export default function Home() {
       <section id="features" ref={featuresRef} className="py-20 md:py-32 bg-gradient-to-b from-white to-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-20">
-            <span className="font-third text-sm font-semibold text-cyan-600 uppercase tracking-wider">Capabilities</span>
+            <span className="font-third text-sm font-semibold text-rose-600 uppercase tracking-wider">Capabilities</span>
             <h2 className="font-main text-4xl sm:text-5xl md:text-6xl font-bold text-gray-900 mb-6 mt-3">
               Everything you need, nothing you don't
             </h2>
@@ -440,7 +440,7 @@ export default function Home() {
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
             {/* Feature 1 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100 transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100 transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 Lightning-Fast Training
@@ -451,7 +451,7 @@ export default function Home() {
             </div>
 
             {/* Feature 2 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100 transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100 transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 Enterprise Security
@@ -462,7 +462,7 @@ export default function Home() {
             </div>
 
             {/* Feature 3 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100  transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100  transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 Real-Time Analytics
@@ -473,7 +473,7 @@ export default function Home() {
             </div>
 
             {/* Feature 4 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100 transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100 transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 Developer-Friendly API
@@ -484,7 +484,7 @@ export default function Home() {
             </div>
 
             {/* Feature 5 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100  transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100  transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 Multi-Project Management
@@ -495,7 +495,7 @@ export default function Home() {
             </div>
 
             {/* Feature 6 */}
-            <div className="feature-card group p-8 rounded-3xl bg-white border-2 border-gray-100  transition-all duration-300">
+            <div className="feature-card group p-8 rounded-3xl bg-white border-1 border-rose-100  transition-all duration-300">
               
               <h3 className="font-main text-xl font-bold text-gray-900 mb-3">
                 A/B Testing Built-In
@@ -527,7 +527,7 @@ export default function Home() {
                   onClick={() => setActiveTab("content")}
                   className={`font-sec px-6 py-3 rounded-xl text-sm font-semibold transition-all ${
                     activeTab === "content"
-                      ? "bg-gradient-to-r from-rose-500 to-rose-600 text-white shadow-lg"
+                      ? "bg-gradient-to-r from-rose-500 to-rose-800 text-white shadow-lg"
                       : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                   }`}
                 >
@@ -537,7 +537,7 @@ export default function Home() {
                   onClick={() => setActiveTab("collaborative")}
                   className={`font-sec px-6 py-3 rounded-xl text-sm font-semibold transition-all ${
                     activeTab === "collaborative"
-                      ? "bg-gradient-to-r from-cyan-500 to-cyan-600 text-white shadow-lg"
+                      ? "bg-gradient-to-r from-cyan-500 to-cyan-800 text-white shadow-lg"
                       : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                   }`}
                 >
@@ -547,7 +547,7 @@ export default function Home() {
                   onClick={() => setActiveTab("hybrid")}
                   className={`font-sec px-6 py-3 rounded-xl text-sm font-semibold transition-all ${
                     activeTab === "hybrid"
-                      ? "bg-gradient-to-r from-rose-500 to-cyan-500 text-white shadow-lg"
+                      ? "bg-gradient-to-r from-rose-500 to-cyan-800 text-white shadow-lg"
                       : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                   }`}
                 >
@@ -556,7 +556,7 @@ export default function Home() {
               </div>
 
               {/* Tab Content */}
-              <div className="bg-gray-50 rounded-3xl p-8 border border-gray-200">
+              <div className="bg-gray-50 rounded-3xl p-8 border-1 border-gray-100">
                 {activeTab === "content" && (
                   <div className="space-y-4">
                     <h4 className="font-main text-lg font-bold text-gray-900">Best for item-centric recommendations</h4>
@@ -629,7 +629,7 @@ export default function Home() {
             {/* Code Preview */}
             <div className="relative">
               
-              <div className="relative bg-gray-900 rounded-3xl p-8 shadow-2xl overflow-hidden">
+              <div className="relative bg-gray-900 rounded-3xl p-8 sm:mr-3 shadow-2xl overflow-hidden">
                 <div className="flex items-center gap-2 mb-6">
                   <div className="w-3 h-3 rounded-full bg-rose-500"></div>
                   <div className="w-3 h-3 rounded-full bg-yellow-500"></div>

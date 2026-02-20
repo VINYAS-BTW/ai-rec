@@ -328,7 +328,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
         transition={{ delay: 0.6, duration: 0.6 }}
         className="grid lg:grid-cols-[1.5fr_1fr] gap-6 mt-6"
       >
-        <div className="relative bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg ">
+        <div className="relative bg-white rounded-3xl border border-slate-200 overflow-hidden  ">
           <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-rose-100/30 to-cyan-100/30 rounded-full blur-3xl"></div>
 
           <div className="relative p-6">
@@ -425,7 +425,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
           </div>
         </div>
 
-        <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg hover:shadow-xl transition-all duration-500">
+        <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden  transition-all duration-500">
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
@@ -523,10 +523,10 @@ const StatusCard = ({ name, status = "checking", endpoint, latency }) => {
 
   return (
     <motion.div
-      className={`group relative bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm  ${config.glow} `}
+      className={`group relative bg-white rounded-3xl border border-slate-200 overflow-hidden    `}
     >
       <div className="absolute bottom-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-rose-400 via-cyan-100 to-rose-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
-      <div className="absolute top-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-cyan-400 via-cyan-100 to-cyan-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
+      <div className="absolute top-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-cyan-500 via-cyan-100 to-cyan-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
 
       <div className="relative p-6">
         <div className="flex items-center justify-between mb-3">
@@ -642,7 +642,7 @@ const ProjectActivityItem = ({ project, onClick }) => {
 const SummaryItemPro = ({ label, value, subtitle }) => (
   <motion.div
     whileHover={{ scale: 1.0 }}
-    className="text-center p-4 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:border-white/20 transition-all duration-300"
+    className="text-center p-4 rounded-3xl bg-white/5 backdrop-blur-sm border border-white/10 hover:border-white/20 transition-all duration-300"
   >
     <motion.p
       initial={{ scale: 0 }}
@@ -652,7 +652,7 @@ const SummaryItemPro = ({ label, value, subtitle }) => (
     >
       {value}
     </motion.p>
-    <p className="text-xs text-slate-300 mb-1 font-third">{label}</p>
+    <p className="text-xs text-slate-300 mb-1 text-center pr-1 font-third">{label}</p>
     <span className="text-[10px] text-slate-400 font-third">{subtitle}</span>
   </motion.div>
 );
@@ -1584,7 +1584,7 @@ export default function AppShell() {
         <button
           type="button"
           onClick={() => setIsSidebarOpen(true)}
-          className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-rose-600 text-white shadow-md"
+          className="inline-flex items-center justify-center w-9 h-9 rounded-3xl bg-rose-900 text-white "
           aria-label="Open sidebar"
         >
           <Menu className="w-5 h-5" />
@@ -1643,7 +1643,7 @@ export default function AppShell() {
                 <button
                   type="button"
                   onClick={() => setIsSidebarOpen(false)}
-                  className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white text-gray-700 shadow-sm border border-gray-200"
+                  className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-3xl bg-neutral-50 text-gray-700 shadow-sm border border-gray-200"
                   aria-label="Close sidebar"
                 >
                   <X className="w-5 h-5" />

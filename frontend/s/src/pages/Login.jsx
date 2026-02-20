@@ -50,7 +50,7 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-neutral-100 via-slate-100 to-neutral-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-white rounded-4xl shadow-xl border border-gray-100 p-8">
+        <div className="bg-white rounded-4xl  border border-rose-100 p-8">
           <div className="flex items-center justify-center space-x-3 mb-8">
             <div className="w-12 h-12 bg-gradient-to-br from-red-600 to-cyan-900 rounded-xl flex items-center justify-center shadow-md">
               <Layers className="w-7 h-7 text-white" />
@@ -89,7 +89,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-6 py-3.5 font-semibold rounded-xl bg-gradient-to-br from-rose-600 via-rose-800 to-rose-600 hover:from-rose-800 hover:via-rose-600 hover:to-rose-800 text-white  transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full px-6 py-3.5 font-semibold rounded-xl bg-gradient-to-br from-rose-900 via-neutral-950 to-cyan-900 hover:from-rose-800 hover:via-neutral-900 hover:to-cyan-800 text-white  transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading ? (
                 <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin font-third" />
@@ -122,7 +122,7 @@ export default function Login() {
 
           <p className="mt-6 text-center text-sm text-gray-600">
             Don&apos;t have an account?{" "}
-            <Link to="/signup" className="font-semibold text-rose-600 hover:text-rose-800">
+            <Link to="/signup" className="font-semibold text-rose-600  hover:text-rose-800">
               Sign up
             </Link>
           </p>

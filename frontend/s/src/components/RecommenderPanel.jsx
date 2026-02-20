@@ -140,7 +140,7 @@ const Card = ({ children, className = "", gradient = false }) => (
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.5 }}
-    className={`bg-white rounded-3xl shadow-lg border border-slate-200 overflow-hidden hover:shadow-xl transition-all duration-500 ${
+    className={`bg-white rounded-3xl  border border-slate-200 overflow-hidden hover:shadow-xl transition-all duration-500 ${
       gradient ? "bg-gradient-to-br from-white via-slate-50 to-white" : ""
     } ${className}`}
   >
@@ -823,13 +823,7 @@ function RecommenderPanel() {
                 
                 <div className="relative p-8">
                   <div className="flex items-center space-x-4 mb-8">
-                    <motion.div
-                      whileHover={{ rotate: 360 }}
-                      transition={{ duration: 0.6 }}
-                      className="w-14 h-14 bg-gradient-to-br from-rose-700  to-cyan-600 rounded-full flex items-center justify-center "
-                    >
-                      <Sparkles className="w-7 h-7 text-white" />
-                    </motion.div>
+                    
                     <div>
                       <h2 className="text-2xl font-bold text-gray-900 font-main">
                         Create New Project
@@ -857,7 +851,7 @@ function RecommenderPanel() {
                       <label className="block text-sm font-bold text-gray-700 mb-2 font-third">
                         How do you want to build recommendations?
                       </label>
-                      <Select
+                      <Select className="text-sm"
                         value={projectMode}
                         onChange={(e) => {
                           setProjectMode(e.target.value);
@@ -940,7 +934,7 @@ function RecommenderPanel() {
                         
                         <div className="relative">
                           <div className="flex items-center space-x-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-xl flex items-center justify-center shadow-md ">
+                            <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-rose-700 rounded-xl flex items-center justify-center shadow-md ">
                               <FileText className="w-5 h-5 text-white" />
                             </div>
                             <h3 className="font-bold text-base text-gray-900 font-third">
@@ -990,7 +984,7 @@ function RecommenderPanel() {
                         
                         <div className="relative">
                           <div className="flex items-center space-x-3 mb-4">
-                            <div className="w-10 h-10 bg-gradient-to-br from-rose-500 to-pink-500 rounded-xl flex items-center justify-center shadow-md">
+                            <div className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-rose-700 rounded-xl flex items-center justify-center shadow-md">
                               <Users className="w-5 h-5 text-white" />
                             </div>
                             <h3 className="font-bold text-base text-gray-900 font-third">
