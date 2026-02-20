@@ -435,11 +435,19 @@ async def process_project(project_id: int, db: Session):
             saved_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
             if os.path.isdir(saved_model_path):
                 shutil.rmtree(saved_model_path)
+            # Use absolute code_paths so training works when PM2/uvicorn runs from a different cwd (e.g. on server).
+            _code_paths = [
+                os.path.join(_BACK2_DIR, "dynamic_recommender.py"),
+                os.path.join(_BACK2_DIR, "Content.py"),
+                os.path.join(_BACK2_DIR, "Collaborative.py"),
+                os.path.join(_BACK2_DIR, "Hybrid.py"),
+                os.path.join(_BACK2_DIR, "ParameterDriven.py"),
+            ]
             mlflow.pyfunc.save_model(
                 path=saved_model_path,
                 python_model=MLflowRecommenderWrapper(),
                 artifacts=artifacts,
-                code_paths=["dynamic_recommender.py", "Content.py", "Collaborative.py", "Hybrid.py", "ParameterDriven.py"],
+                code_paths=_code_paths,
             )
             print(f"[Task {project_id}]: Model saved to {saved_model_path}")
 

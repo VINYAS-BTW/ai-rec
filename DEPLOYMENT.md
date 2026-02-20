@@ -526,3 +526,69 @@ curl -v --connect-timeout 5 http://203.192.243.34:1405
 
 - Use **203.192.243.34** (your public IP from `curl ifconfig.me`) for browser and API calls from outside.
 - Use **122.166.250.176** only if that’s the IP you get when you run `curl ifconfig.me` **from the server**; otherwise stick to 203.192.243.34 for external access.
+
+---
+
+## 17. Troubleshooting: "Project processing failed" (model training on server)
+
+When you create a project and train a model, the frontend polls the back2 service. If the backend sets the project status to `error`, you see "Project processing failed." Fixes below.
+
+### 1. See the real error on the server
+
+The back2 process logs the exception. SSH in and run:
+
+```bash
+pm2 logs back2 --lines 100
+```
+
+Trigger training again from the UI, then check the logs. Look for lines like `[Task <id>]: ERROR processing project. ...` and the traceback. That tells you the actual cause (e.g. missing file, missing dependency, permission error).
+
+### 2. Run back2 from the correct directory
+
+Back2 must run with its working directory set to the `back2` folder so that uploads and model files use the right paths. Restart PM2 with an explicit cwd:
+
+```bash
+cd ~/ai-rec/backend/back2
+pm2 delete back2
+pm2 start "venv/bin/uvicorn saas_api:app --host 0.0.0.0 --port 8000" --name back2 --interpreter none --cwd /home/uroot/ai-rec/backend/back2
+pm2 save
+```
+
+Replace `/home/uroot` with your actual home path if different (use `echo $HOME`).
+
+### 3. Ensure directories exist and are writable
+
+On the server:
+
+```bash
+cd ~/ai-rec/backend/back2
+ls -la user_uploads project_models
+```
+
+If they’re missing, create them:
+
+```bash
+mkdir -p user_uploads project_models
+chmod 755 user_uploads project_models
+```
+
+### 4. Python dependencies
+
+Training uses pandas, scikit-learn, scipy, numpy, and MLflow. Ensure they’re installed in the venv:
+
+```bash
+cd ~/ai-rec/backend/back2
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Then restart back2: `pm2 restart back2`.
+
+### 5. Database and file paths
+
+- Back2 stores project and file metadata in the same Neon DB as auth/webhooks. If DB is unreachable, upload or training can fail (check back2 logs).
+- Uploaded CSV files are stored under `backend/back2/user_uploads/`. The path is stored in the DB; if you moved the app or run from another machine, those paths become invalid. Create new projects and re-upload files after fixing the server setup.
+
+### 6. Code change (already in repo)
+
+The app now uses **absolute paths** for the MLflow `code_paths` (Content.py, Collaborative.py, etc.) so training works even when PM2 starts uvicorn from a different directory. After pulling the latest code, restart back2 and try training again.
