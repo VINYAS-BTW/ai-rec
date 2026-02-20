@@ -49,3 +49,4 @@ backend/back2/project_models/*
 backend/back2/__pycache__/*
 
 DEPLOY_UBUNTU.md
+ai-rec/DEPLOYMENT.md
