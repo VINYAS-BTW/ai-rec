@@ -67,6 +67,8 @@ export const login = async (req, res) => {
 };
 
 
+// AUTH_BASE_URL = URL where this auth service is reachable (used as redirect_uri for Google OAuth).
+// FRONTEND_URL = URL of the frontend (where to redirect after OAuth success/failure).
 const authBaseUrl = (process.env.AUTH_BASE_URL || "http://localhost:8080").replace(/\/$/, "");
 const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
 

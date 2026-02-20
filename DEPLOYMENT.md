@@ -106,7 +106,9 @@ DATABASE_URL=postgresql://USER:PASSWORD@YOUR_NEON_HOST/YOUR_DB?sslmode=require&c
 JWT_SECRET="your-strong-secret-here-change-in-production"
 GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-google-client-secret
-CORS_ORIGINS=http://203.192.243.34:1405,http://203.192.243.34:1406,http://122.166.250.176:1405
+AUTH_BASE_URL=http://122.166.250.176:1402
+FRONTEND_URL=http://122.166.250.176:1406
+CORS_ORIGINS=http://122.166.250.176:1406
 ```
 
 Run DB migrations (Drizzle):
@@ -378,11 +380,57 @@ Note: port forwarding is on your router; the server firewall only needs to allow
 - [ ] All three `.env` files have `CORS_ORIGINS` including `http://203.192.243.34:1405` (and 1406 if used)
 - [ ] Frontend `.env.production` has `VITE_AUTH_API_URL`, `VITE_ML_API_URL`, `VITE_WEBHOOK_API_URL` pointing at 203.192.243.34:1402, 1403, 1404
 - [ ] `JWT_SECRET` is the same in auth and back2
-- [ ] Google OAuth: if you use a domain later, add it to the Google Cloud OAuth consent screen and authorized redirect URIs
+- [ ] Google OAuth: see section below for production redirect URI and env vars
 
 ---
 
-## 14. If you use a domain later
+## 14. Google OAuth on the server (fix “OAuth isn’t working”)
+
+For “Sign in with Google” to work in production, two things must be correct.
+
+### 14.1 Auth service `.env` (on the server)
+
+In `backend/auth/.env` you **must** set:
+
+```env
+AUTH_BASE_URL=http://122.166.250.176:1402
+FRONTEND_URL=http://122.166.250.176:1406
+```
+
+- **AUTH_BASE_URL** = public URL of the auth service. Google will redirect the user to `AUTH_BASE_URL/auth/google/callback`. So it must be exactly the URL where your auth app is reachable (e.g. `http://122.166.250.176:1402`).
+- **FRONTEND_URL** = public URL of the frontend. After OAuth, the auth service redirects the user to `FRONTEND_URL/oauth-success?token=...` or `FRONTEND_URL/login`. So it must be the URL where users see your app (e.g. `http://122.166.250.176:1406`).
+
+If you use a different IP or port, change the values accordingly (no trailing slash).
+
+Then restart the auth process:
+
+```bash
+pm2 restart auth
+```
+
+### 14.2 Google Cloud Console – Authorized redirect URI
+
+Google only allows redirects to URIs you explicitly add.
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → your project.
+2. Go to **APIs & Services** → **Credentials**.
+3. Open your **OAuth 2.0 Client ID** (Web application type).
+4. Under **Authorized redirect URIs**, add exactly:
+   ```text
+   http://122.166.250.176:1402/auth/google/callback
+   ```
+5. Save.
+
+If your public IP or auth port is different, the redirect URI must match (e.g. `http://YOUR_IP:1402/auth/google/callback`). No trailing slash.
+
+### 14.3 Quick check
+
+- From the server: `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/auth/google` should get a **302** (redirect to Google).
+- In the browser, open `http://122.166.250.176:1406`, click “Sign in with Google”; you should go to Google, then after signing in come back to your app. If you get “redirect_uri_mismatch”, the redirect URI in Google Console does not exactly match what the auth service sends (check AUTH_BASE_URL and the value in Google).
+
+---
+
+## 15. If you use a domain later
 
 - Point the domain’s A record to **203.192.243.34**.
 - In each backend `.env`, add `https://yourdomain.com` to `CORS_ORIGINS`.
@@ -392,7 +440,7 @@ You’re done. For a quick test, open **http://203.192.243.34:1405** (or 1406) a
 
 ---
 
-## 15. Troubleshooting: "Connection timed out"
+## 16. Troubleshooting: "Connection timed out"
 
 If the browser or `curl` shows **connection timed out** when opening `http://203.192.243.34:1405` (or 1402/1403/1404), the request is not reaching the server. Work through these checks.
 
