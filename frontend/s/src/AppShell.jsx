@@ -1622,7 +1622,7 @@ export default function AppShell() {
                 <motion.div
                   whileHover={{ rotate: 0 }}
                   transition={{ duration: 0.1 }}
-                  className="w-11 h-11 bg-gradient-to-br from-rose-900 via-rose-800 to-cyan-600 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0"
+                  className="w-11 h-11 bg-gradient-to-br from-rose-700 via-neutral-950 to-cyan-700 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0"
                 >
                   <Layers className="w-6 h-6 text-white" />
                 </motion.div>
@@ -1665,7 +1665,7 @@ export default function AppShell() {
                       onClick={() => handleNavClick(item.id)}
                       whileHover={{ scale: 1.02, x: 0 }}
                       whileTap={{ scale: 0.98 }}
-                      className="group w-full flex items-center gap-3 px-0 py-3.5 rounded-2xl hover:border-t-1 hover:border-rose-500 transition-all duration-300 cursor-pointer"
+                      className="group w-full flex items-center gap-3 px-0 py-3.5 rounded-2xl hover:border-t-1 hover:border-rose-800 transition-all duration-300 cursor-pointer"
                       title={!isSidebarOpen ? item.label : ""}
                     >
                       <motion.span
@@ -1673,8 +1673,8 @@ export default function AppShell() {
                         transition={{ duration: 0.6 }}
                         className={`inline-flex items-center justify-center rounded-2xl w-10 h-10  flex-shrink-0 transition-all duration-300 ${
                           isActive
-                            ? "bg-gradient-to-br from-rose-600 to-cyan-600 text-white shadow-lg shadow-rose-200"
-                            : "bg-gray-100 text-gray-600 group-hover:bg-gradient-to-br group-hover:from-rose-500 group-hover:to-cyan-500 group-hover:text-white group-hover:shadow-md"
+                            ? "bg-gradient-to-br from-rose-400 to-cyan-950 text-white "
+                            : " text-gray-600 group-hover:bg-gradient-to-br group-hover:from-rose-300 group-hover:to-cyan-800 group-hover:text-white group-hover:shadow-md"
                         }`}
                       >
                         <Icon className="w-5 h-5" />

@@ -28,6 +28,7 @@ import {
 import { API_BACKEND, getBackendAuthHeaders } from "../api";
 import { useAuth } from "../context/AuthContext";
 
+
 const Input = (props) => (
   <motion.input
     whileFocus={{ scale: 1.0 }}
@@ -112,7 +113,7 @@ const SearchableSelect = ({ value, onChange, options, placeholder = "Any", id })
 const Button = ({ children, variant = "primary", icon: Icon, ...props }) => {
   const variants = {
     primary:
-      "bg-gradient-to-br from-rose-600 to-cyan-600 hover:from-rose-700 hover:to-cyan-700 text-white shadow-xs  hover:shadow-xs  cursor-pointer",
+      "bg-gradient-to-br from-rose-800 via-neutral-800 to-cyan-900 hover:from-rose-600 hover:via-neutral-800 hover:to-cyan-600 text-white shadow-xs  hover:shadow-xs  cursor-pointer",
     secondary:
       "bg-white border-2 border-slate-200 hover:border-cyan-400 text-slate-700 hover:text-slate-900 shadow-sm ",
   };
@@ -140,7 +141,7 @@ const Card = ({ children, className = "", gradient = false }) => (
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
     transition={{ duration: 0.5 }}
-    className={`bg-white rounded-3xl  border border-slate-200 overflow-hidden hover:shadow-xl transition-all duration-500 ${
+    className={`bg-white rounded-3xl  border border-neutral-200   transition-all duration-500 ${
       gradient ? "bg-gradient-to-br from-white via-slate-50 to-white" : ""
     } ${className}`}
   >
@@ -1048,7 +1049,7 @@ function RecommenderPanel() {
             </Card>
 
             <Card>
-              <div className="relative overflow-hidden">
+              <div className="relative ">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-emerald-100/30 to-teal-100/30 rounded-full blur-3xl"></div>
                 
                 <div className="relative p-8">
@@ -1129,15 +1130,15 @@ function RecommenderPanel() {
                             Model Type:
                           </span>
                           <motion.span
-                            whileHover={{ scale: 1.05 }}
+                            whileHover={{ scale: 1.0 }}
                             className={`text-xs font-bold px-4 py-2 rounded-full shadow-sm ${
                               selectedProject.model_type === "parameter_driven"
-                                ? "bg-gradient-to-r from-cyan-100 to-blue-100 text-cyan-800 border-2 border-cyan-200"
+                                ? "bg-gradient-to-r from-cyan-400 to-blue-50 text-cyan-800 border-1 border-cyan-200"
                                 : selectedProject.model_type === "content"
-                                ? "bg-gradient-to-r from-emerald-100 to-teal-100 text-emerald-800 border-2 border-emerald-200"
+                                ? "bg-gradient-to-r from-emerald-400 to-teal-50 text-emerald-800 border-1 border-emerald-200"
                                 : selectedProject.model_type === "collaborative"
-                                ? "bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-800 border-2 border-amber-200"
-                                : "bg-gradient-to-r from-purple-100 to-pink-100 text-purple-800 border-2 border-purple-200"
+                                ? "bg-gradient-to-r from-amber-400 to-yellow-50 text-amber-800 border-1 border-amber-200"
+                                : "bg-gradient-to-r from-purple-400 to-pink-50 text-purple-800 border-1 border-purple-200"
                             }`}
                           >
                             {selectedProject.model_type === "parameter_driven" ? "PARAMETER-DRIVEN" : selectedProject.model_type?.toUpperCase()}
@@ -1206,9 +1207,9 @@ function RecommenderPanel() {
                                     return (
                                       <label
                                         key={fc.name}
-                                        className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 cursor-pointer transition-all font-third text-sm ${
+                                        className={`flex items-center gap-2 px-3 py-2 rounded-full border-1 cursor-pointer transition-all font-third text-sm ${
                                           isSelected
-                                            ? "bg-cyan-50 border-cyan-400 text-cyan-800"
+                                            ? "bg-cyan-50 border-cyan-300 text-cyan-800"
                                             : "bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300"
                                         }`}
                                       >
@@ -1230,7 +1231,7 @@ function RecommenderPanel() {
                                               setSelectedCriteria((prev) => (prev || []).filter((c) => c !== fc.name));
                                             }
                                           }}
-                                          className="rounded border-slate-300 text-cyan-600 focus:ring-cyan-400"
+                                          className="rounded-full border-slate-300 text-cyan-600 focus:ring-cyan-400"
                                         />
                                         <span>{fc.name}</span>
                                       </label>
@@ -1240,7 +1241,7 @@ function RecommenderPanel() {
                               </div>
                               {selectedCriteria?.length > 0 && (
                                 <div className="space-y-3 pt-2 border-t border-slate-200">
-                                  <p className="text-xs font-bold text-gray-600 font-third">Set values (optional)</p>
+                                  <p className="text-sm font-bold text-gray-900 font-third">Set values (optional)</p>
                                   {contextOptions.feature_columns
                                     .filter((fc) => selectedCriteria.includes(fc.name))
                                     .map((fc) => {
@@ -1267,7 +1268,7 @@ function RecommenderPanel() {
                                                 setContextSelections((prev) => ({ ...prev, [fc.name]: e.target.value }))
                                               }
                                               placeholder="Any"
-                                              className="w-full px-4 py-3 border-2 border-slate-200 rounded-2xl shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400 bg-white text-sm font-third"
+                                              className="w-full px-4 py-3 border-1 border-slate-200 rounded-2xl focus:outline-none focus:ring-1 focus:ring-cyan-100 focus:border-cyan-400 bg-white text-sm font-third"
                                             />
                                           ) : (
                                             <SearchableSelect
@@ -1420,7 +1421,7 @@ function RecommenderPanel() {
                                         >
                                           <div className="flex items-center justify-between gap-4">
                                             <div className="flex items-center space-x-4 min-w-0">
-                                              <span className="w-10 h-10 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-lg flex-shrink-0">
+                                              <span className="w-10 h-10 bg-gradient-to-br from-rose-800 via-neutral-900 to-cyan-600 rounded-3xl flex items-center justify-center text-white font-bold text-sm shadow-sm flex-shrink-0">
                                                 {index + 1}
                                               </span>
                                               <p className="text-gray-900 font-semibold font-third truncate">
@@ -1450,6 +1451,7 @@ function RecommenderPanel() {
                 </div>
               </div>
             </Card>
+            
           </div>
 
           {/* Right side: projects */}
@@ -1471,15 +1473,7 @@ function RecommenderPanel() {
                   ></motion.div>
                 </div>
                 <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2 scrollbar-hide">
-                  <style jsx>{`
-                    .scrollbar-hide::-webkit-scrollbar {
-                      display: none;
-                    }
-                    .scrollbar-hide {
-                      -ms-overflow-style: none;
-                      scrollbar-width: none;
-                    }
-                  `}</style>
+                  
                   
                   {projects.length === 0 && (
                     <motion.div
