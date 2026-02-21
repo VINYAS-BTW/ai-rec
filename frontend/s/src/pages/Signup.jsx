@@ -48,11 +48,11 @@ export default function Signup() {
       <div className="w-full max-w-md">
         <div className="bg-white rounded-3xl border border-rose-100 p-8">
           <div className="flex items-center justify-center space-x-3 mb-8">
-            <div className="w-12 h-12 bg-gradient-to-br from-red-600 to-cyan-800 rounded-xl flex items-center justify-center shadow-md">
+            <div className="w-12 h-12 bg-gradient-to-br from-rose-700 via-neutral-900 to-cyan-700 rounded-2xl flex items-center justify-center shadow-md">
               <Layers className="w-7 h-7 text-white" />
             </div>
             <div>
-              <h1 className="text-3xl font-extrabold bg-gradient-to-r from-neutral-800 to-rose-600 bg-clip-text text-transparent font-main">
+              <h1 className="text-3xl font-extrabold bg-gradient-to-r from-rose-900 via-neutral-900 to-cyan-900 bg-clip-text text-transparent font-main">
                 Recom BaaS
               </h1>
               <p className="text-sm text-gray-800 font-sec">Ai Based Recommendation System</p>
