@@ -7,7 +7,7 @@ A full-stack **recommendation platform (backend-as-a-service)** with ML models (
 ---
 
 ## Prerequisites
-
+- **React.js**
 - **Node.js** (v18+)
 - **Python** (3.9+)
 - **PostgreSQL** (local or [Neon](https://neon.tech))

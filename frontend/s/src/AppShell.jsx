@@ -328,7 +328,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
         transition={{ delay: 0.6, duration: 0.6 }}
         className="grid lg:grid-cols-[1.5fr_1fr] gap-6 mt-6"
       >
-        <div className="relative bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg ">
+        <div className="relative bg-white rounded-3xl border border-slate-200 overflow-hidden  ">
           <div className="absolute top-0 right-0 w-64 h-64 bg-gradient-to-br from-rose-100/30 to-cyan-100/30 rounded-full blur-3xl"></div>
 
           <div className="relative p-6">
@@ -425,7 +425,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
           </div>
         </div>
 
-        <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-lg hover:shadow-xl transition-all duration-500">
+        <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden  transition-all duration-500">
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
@@ -523,10 +523,10 @@ const StatusCard = ({ name, status = "checking", endpoint, latency }) => {
 
   return (
     <motion.div
-      className={`group relative bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm  ${config.glow} `}
+      className={`group relative bg-white rounded-3xl border border-slate-200 overflow-hidden    `}
     >
       <div className="absolute bottom-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-rose-400 via-cyan-100 to-rose-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
-      <div className="absolute top-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-cyan-400 via-cyan-100 to-cyan-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
+      <div className="absolute top-0 left-0 right-0 h-[0.5px] bg-gradient-to-r from-cyan-500 via-cyan-100 to-cyan-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500 origin-right"></div>
 
       <div className="relative p-6">
         <div className="flex items-center justify-between mb-3">
@@ -642,7 +642,7 @@ const ProjectActivityItem = ({ project, onClick }) => {
 const SummaryItemPro = ({ label, value, subtitle }) => (
   <motion.div
     whileHover={{ scale: 1.0 }}
-    className="text-center p-4 rounded-2xl bg-white/5 backdrop-blur-sm border border-white/10 hover:border-white/20 transition-all duration-300"
+    className="text-center p-4 rounded-3xl bg-white/5 backdrop-blur-sm border border-white/10 hover:border-white/20 transition-all duration-300"
   >
     <motion.p
       initial={{ scale: 0 }}
@@ -652,7 +652,7 @@ const SummaryItemPro = ({ label, value, subtitle }) => (
     >
       {value}
     </motion.p>
-    <p className="text-xs text-slate-300 mb-1 font-third">{label}</p>
+    <p className="text-xs text-slate-300 mb-1 text-center pr-1 font-third">{label}</p>
     <span className="text-[10px] text-slate-400 font-third">{subtitle}</span>
   </motion.div>
 );
@@ -1584,7 +1584,7 @@ export default function AppShell() {
         <button
           type="button"
           onClick={() => setIsSidebarOpen(true)}
-          className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-rose-600 text-white shadow-md"
+          className="inline-flex items-center justify-center w-9 h-9 rounded-3xl bg-rose-900 text-white "
           aria-label="Open sidebar"
         >
           <Menu className="w-5 h-5" />
@@ -1622,7 +1622,7 @@ export default function AppShell() {
                 <motion.div
                   whileHover={{ rotate: 0 }}
                   transition={{ duration: 0.1 }}
-                  className="w-11 h-11 bg-gradient-to-br from-rose-900 via-rose-800 to-cyan-600 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0"
+                  className="w-11 h-11 bg-gradient-to-br from-rose-700 via-neutral-950 to-cyan-700 rounded-2xl flex items-center justify-center shadow-lg flex-shrink-0"
                 >
                   <Layers className="w-6 h-6 text-white" />
                 </motion.div>
@@ -1643,7 +1643,7 @@ export default function AppShell() {
                 <button
                   type="button"
                   onClick={() => setIsSidebarOpen(false)}
-                  className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white text-gray-700 shadow-sm border border-gray-200"
+                  className="md:hidden inline-flex items-center justify-center w-9 h-9 rounded-3xl bg-neutral-50 text-gray-700 shadow-sm border border-gray-200"
                   aria-label="Close sidebar"
                 >
                   <X className="w-5 h-5" />
@@ -1665,7 +1665,7 @@ export default function AppShell() {
                       onClick={() => handleNavClick(item.id)}
                       whileHover={{ scale: 1.02, x: 0 }}
                       whileTap={{ scale: 0.98 }}
-                      className="group w-full flex items-center gap-3 px-0 py-3.5 rounded-2xl hover:border-t-1 hover:border-rose-500 transition-all duration-300 cursor-pointer"
+                      className="group w-full flex items-center gap-3 px-0 py-3.5 rounded-2xl hover:border-t-1 hover:border-rose-800 transition-all duration-300 cursor-pointer"
                       title={!isSidebarOpen ? item.label : ""}
                     >
                       <motion.span
@@ -1673,8 +1673,8 @@ export default function AppShell() {
                         transition={{ duration: 0.6 }}
                         className={`inline-flex items-center justify-center rounded-2xl w-10 h-10  flex-shrink-0 transition-all duration-300 ${
                           isActive
-                            ? "bg-gradient-to-br from-rose-600 to-cyan-600 text-white shadow-lg shadow-rose-200"
-                            : "bg-gray-100 text-gray-600 group-hover:bg-gradient-to-br group-hover:from-rose-500 group-hover:to-cyan-500 group-hover:text-white group-hover:shadow-md"
+                            ? "bg-gradient-to-br from-rose-400 to-cyan-950 text-white "
+                            : " text-gray-600 group-hover:bg-gradient-to-br group-hover:from-rose-300 group-hover:to-cyan-800 group-hover:text-white group-hover:shadow-md"
                         }`}
                       >
                         <Icon className="w-5 h-5" />

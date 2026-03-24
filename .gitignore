@@ -50,3 +50,4 @@ backend/back2/__pycache__/*
 
 DEPLOY_UBUNTU.md
 /docs/*
+DEPLOYMENT.md
