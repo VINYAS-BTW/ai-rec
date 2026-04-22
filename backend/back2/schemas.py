@@ -66,6 +66,12 @@ class ContextOptionsResponse(BaseModel):
     target_values: Optional[List[str]] = None  # distinct values of target (e.g. movie/car titles) for "recommend based on this item"
 
 
+class AgentContextOptionsResponse(ContextOptionsResponse):
+    """Context options for a domain with auto-selected recommender project."""
+    project_id: int
+    domain_slug: str
+
+
 class TargetValuesResponse(BaseModel):
     """Values of the column the model recommends — for 'similar to' dropdown (content, parameter_driven, hybrid)."""
     target_column: str

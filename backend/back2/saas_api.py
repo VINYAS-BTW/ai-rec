@@ -4,6 +4,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+import io
 import uuid
 import json
 import asyncio
@@ -20,12 +21,15 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
+
+from pydantic import BaseModel
 
 import models
 import schemas
 import database
 import httpx
+from superagent import InMemorySessionStore, SuperAgent, infer_top_k_from_text
 # --- MLflow path-only URI fix: patch registry before mlflow is used so all callers get the wrapper ---
 _BACK2_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -91,8 +95,231 @@ async def notify_webhooks(event_type: str, payload: dict):
     except Exception as e:
         print(f"❌ notify_webhooks failed: {e}")
 # --- App Setup & Model Storage ---
-USER_UPLOADS_DIR = os.path.join(_BACK2_DIR, "user_uploads")
+# Override with USER_UPLOADS_DIR in .env when deploying (e.g. Docker volume path).
+USER_UPLOADS_DIR = os.path.normpath(os.getenv("USER_UPLOADS_DIR") or os.path.join(_BACK2_DIR, "user_uploads"))
 os.makedirs(USER_UPLOADS_DIR, exist_ok=True)
+
+# Bundled CSVs for domain agents (parameter-driven training). Repo layout: backend/agent_datasets/
+AGENT_DATASETS_DIR = os.path.normpath(os.path.join(os.path.dirname(_BACK2_DIR), "agent_datasets"))
+
+# Preset id -> dataset templates for domain agents.
+# If `interaction_csv` is provided, we train HYBRID (content + interactions).
+AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "logistics_carriers": {
+        "content_csv": "logistics_carriers_content.csv",
+        "interaction_csv": "logistics_carriers_interactions.csv",
+        "domain_slug": "logistics_carriers",
+        "description": "Rank carriers from logistics constraints (mode, region, transit, cost, reliability, …).",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "carrier_name",
+            "target_column": "carrier_name",
+            "feature_cols": [
+                "mode",
+                "region",
+                "country",
+                "capacity_type",
+                "capacity_unit",
+                "avg_transit_days",
+                "max_transit_days",
+                "min_transit_days",
+                "service_level",
+                "temperature_controlled",
+                "hazardous_capable",
+                "tracking_available",
+                "carrier_type",
+                "certifications",
+                "cost_per_kg",
+                "cost_per_shipment_base",
+                "currency",
+                "reliability_score",
+                "on_time_pct_typical",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+    "logistics_lanes": {
+        "content_csv": "logistics_lanes_content.csv",
+        "interaction_csv": "logistics_lanes_interactions.csv",
+        "domain_slug": "logistics_lanes",
+        "description": "Rank lanes from origin/destination constraints (mode, distance, transit, customs, …).",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "lane_id",
+            "target_column": "lane_id",
+            "feature_cols": [
+                "origin_region",
+                "origin_country",
+                "dest_region",
+                "dest_country",
+                "mode",
+                "distance_km",
+                "typical_volume_teu",
+                "transit_days_typical",
+                "avg_cost_per_shipment",
+                "customs_required",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+    "logistics_warehouses": {
+        "content_csv": "logistics_warehouses_content.csv",
+        "interaction_csv": "logistics_warehouses_interactions.csv",
+        "domain_slug": "logistics_warehouses",
+        "description": "Rank warehouses from capacity + lead-time + capability constraints.",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "warehouse_id",
+            "target_column": "warehouse_id",
+            "feature_cols": [
+                "country",
+                "region",
+                "city",
+                "capacity_volume_cbm",
+                "capacity_pallets",
+                "capacity_sqft",
+                "temperature_zone",
+                "hazmat_capable",
+                "lead_time_days_receipt",
+                "lead_time_days_ship",
+                "last_mile_radius_km",
+                "automation_level",
+                "capabilities",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+    "supply_chain_suppliers": {
+        "content_csv": "supply_chain_suppliers_content.csv",
+        "interaction_csv": "supply_chain_suppliers_interactions.csv",
+        "domain_slug": "supply_chain_suppliers",
+        "description": "Rank suppliers from supply constraints (category, region, lead time, MOQ, risk, …).",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "supplier_name",
+            "target_column": "supplier_name",
+            "feature_cols": [
+                "category",
+                "region",
+                "country",
+                "lead_time_days",
+                "min_order_value",
+                "min_order_qty",
+                "payment_terms",
+                "quality_score",
+                "reliability_score",
+                "risk_rating",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+    "supply_chain_materials": {
+        "content_csv": "supply_chain_materials_content.csv",
+        "interaction_csv": "supply_chain_materials_interactions.csv",
+        "domain_slug": "supply_chain_materials",
+        "description": "Rank materials from supply constraints (type, grade, lead time, cost, shelf life, …).",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "material_id",
+            "target_column": "material_id",
+            "feature_cols": [
+                "material_type",
+                "spec_grade",
+                "unit",
+                "supplier_id",
+                "category",
+                "lead_time_days",
+                "min_order_qty",
+                "price_per_unit",
+                "shelf_life_days",
+                "substitute_ids",
+                "bom_parent_sku",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+    "supply_chain_skus": {
+        "content_csv": "supply_chain_skus_content.csv",
+        "interaction_csv": "supply_chain_skus_interactions.csv",
+        "domain_slug": "supply_chain_skus",
+        "description": "Rank SKUs from inventory constraints (lead time, reorder policy, demand class, cost, …).",
+        "content_schema": {
+            "item_id": "item_id",
+            "item_title": "sku_id",
+            "target_column": "sku_id",
+            "feature_cols": [
+                "category",
+                "brand",
+                "subcategory",
+                "unit",
+                "lead_time_days",
+                "min_order_qty",
+                "reorder_point",
+                "safety_stock",
+                "weight_kg",
+                "volume_cbm",
+                "supplier_id",
+                "material_ids",
+                "abc_class",
+                "demand_volatility",
+                "price",
+                "cost",
+            ],
+        },
+        "interaction_schema": {"user_id": "user_id", "item_id": "item_id", "rating": "rating"},
+    },
+}
+
+
+def _upload_search_dirs() -> List[str]:
+    """Dirs to search for CSVs when DB has a stale absolute path (another host/container)."""
+    raw = os.getenv("USER_UPLOADS_FALLBACK_DIRS", "")
+    extra = [os.path.normpath(p.strip()) for p in raw.split(",") if p.strip()]
+    seen = set()
+    out: List[str] = []
+    for p in [USER_UPLOADS_DIR] + extra:
+        if p and p not in seen and os.path.isdir(p):
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def _resolve_uploaded_file_path(file: models.UploadedFile, db: Optional[Session] = None) -> Optional[str]:
+    """
+    Return a path to the uploaded CSV on this machine. Updates DB if the file is found under
+    USER_UPLOADS_DIR (or fallbacks) by basename while the stored path points elsewhere.
+    """
+    if not file or not (file.storage_path or "").strip():
+        return None
+    stored = str(file.storage_path).strip()
+    if os.path.isfile(stored):
+        return stored
+    base = os.path.basename(stored.replace("\\", "/"))
+    for d in _upload_search_dirs():
+        cand = os.path.join(d, base)
+        if os.path.isfile(cand):
+            if cand != stored and db is not None:
+                file.storage_path = cand
+                db.commit()
+            return cand
+    orig = (file.original_filename or "").strip()
+    if orig:
+        suffix = "_" + orig.replace("\\", "/").split("/")[-1]
+        matches: List[str] = []
+        for d in _upload_search_dirs():
+            try:
+                for name in os.listdir(d):
+                    if name.endswith(suffix):
+                        matches.append(os.path.join(d, name))
+            except OSError:
+                continue
+        if len(matches) == 1:
+            cand = matches[0]
+            if cand != stored and db is not None:
+                file.storage_path = cand
+                db.commit()
+            return cand
+    return None
 # Save models to a local directory (avoids MLflow artifact store and Windows path issues).
 PROJECT_MODELS_DIR = os.path.join(_BACK2_DIR, "project_models")
 os.makedirs(PROJECT_MODELS_DIR, exist_ok=True)
@@ -135,7 +362,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.exception_handler(OperationalError)
 def handle_db_unavailable(request: Request, exc: OperationalError):
     """Return 503 with a clear message when DB (Neon/PostgreSQL) is unreachable."""
@@ -175,6 +401,119 @@ def get_current_user_id(
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+# =========================
+# SuperAgent (MVP) – define AFTER auth dependency
+# =========================
+_superagent_sessions = InMemorySessionStore()
+_superagent = SuperAgent(session_store=_superagent_sessions)
+
+
+class SuperAgentChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+    target_domain: Optional[str] = None
+    context: Dict[str, Any] = {}
+    n: int = 10
+
+
+class SuperAgentChatResponse(BaseModel):
+    session_id: str
+    status: str  # "clarify" | "ok"
+    target_domain: Optional[str] = None
+    used_context: Dict[str, Any] = {}
+    question: Optional[Dict[str, Any]] = None
+    results: Optional[List[Dict[str, Any]]] = None
+
+
+@app.post("/superagent/v1/chat", response_model=SuperAgentChatResponse)
+async def superagent_chat(
+    req: SuperAgentChatRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    session_id = (req.session_id or "").strip() or _superagent_sessions.new_session()
+    prev = _superagent_sessions.get(session_id)
+    explicit_domain = req.target_domain or prev.get("target_domain")
+
+    target_domain, merged_context = _superagent.parse(req.message, explicit_domain, req.context)
+    inferred_k = infer_top_k_from_text(req.message)
+    n = int(inferred_k) if inferred_k and 1 <= int(inferred_k) <= 50 else int(req.n or 10)
+    clarify = _superagent.need_clarification(target_domain)
+    if clarify:
+        _superagent_sessions.upsert(session_id, {"last_user_message": req.message, "context": merged_context})
+        return SuperAgentChatResponse(
+            session_id=session_id,
+            status="clarify",
+            target_domain=None,
+            used_context=merged_context,
+            question={"key": clarify.key, "prompt": clarify.prompt, "options": clarify.options},
+            results=None,
+        )
+
+    # persist selection
+    _superagent_sessions.upsert(session_id, {"target_domain": target_domain, "context": merged_context})
+
+    # If user asked "best X" but provided no constraints, ask a follow-up instead of falling back
+    # to "most frequent targets" (which looks like static/first rows).
+    if not merged_context:
+        picked = _auto_pick_projects_for_domains(
+            db=db,
+            current_user_id=current_user_id,
+            domains=[str(target_domain)],
+        )
+        pid = picked.get(str(target_domain))
+        suggestions: List[str] = []
+        if pid:
+            try:
+                inner = get_project_context_options(project_id=int(pid), current_user_id=current_user_id, db=db)
+                suggestions = [
+                    fc.name
+                    for fc in (inner.feature_columns or [])
+                    if fc and getattr(fc, "name", None) and str(fc.name) != "mean_rating"
+                ][:12]
+            except Exception:
+                suggestions = []
+
+        _superagent_sessions.upsert(session_id, {"target_domain": str(target_domain)})
+        return SuperAgentChatResponse(
+            session_id=session_id,
+            status="clarify",
+            target_domain=str(target_domain),
+            used_context={},
+            question={
+                "key": "constraints",
+                "prompt": (
+                    f"To recommend {target_domain}, tell me what constraints matter (key=value). "
+                    "Pick a constraint to start, or type something like: mode=road, region=North"
+                ),
+                "options": suggestions or None,
+            },
+            results=None,
+        )
+
+    pred = await agent_single_recommend(
+        req=AgentSingleRecommendRequest(
+            correlation_id=f"superagent-{session_id}",
+            context=merged_context,
+            n=n,
+            target_domain=str(target_domain),
+            item_title=None,
+            user_id=None,
+        ),
+        current_user_id=current_user_id,
+        db=db,
+    )
+
+    return SuperAgentChatResponse(
+        session_id=session_id,
+        status="ok",
+        target_domain=str(target_domain),
+        used_context=merged_context,
+        question=None,
+        results=pred.get("results") if isinstance(pred, dict) else None,
+    )
 
 def get_next_project_id(db: Session) -> int:
     """Return the smallest positive integer not used as project id (reuse deleted ids)."""
@@ -251,6 +590,84 @@ async def save_file_and_schema(
     db.commit()
     return db_file
 
+
+async def _create_parameter_driven_project_from_upload(
+    *,
+    background_tasks: BackgroundTasks,
+    current_user_id: int,
+    db: Session,
+    project_name: str,
+    content_file: UploadFile,
+    content_schema: Dict[str, Any],
+) -> models.RecommenderProject:
+    """Create a single-file parameter-driven project and queue training (same pipeline as /create-project/)."""
+    content_schema_json = json.dumps(content_schema)
+    next_id = get_next_project_id(db)
+    db_project = models.RecommenderProject(
+        id=next_id,
+        owner_id=current_user_id,
+        project_name=project_name,
+        status=models.ProjectStatus.PENDING,
+        model_type=models.ModelType.PARAMETER_DRIVEN,
+    )
+    db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+    try:
+        await save_file_and_schema(db, db_project.id, content_file, content_schema_json, models.FileType.CONTENT)
+    except Exception as e:
+        db_project.status = models.ProjectStatus.ERROR
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Error processing files: {e}")
+    background_db = database.SessionLocal()
+    background_tasks.add_task(process_project, db_project.id, background_db)
+    db.refresh(db_project)
+    return db_project
+
+
+async def _create_hybrid_project_from_uploads(
+    *,
+    background_tasks: BackgroundTasks,
+    current_user_id: int,
+    db: Session,
+    project_name: str,
+    content_file: UploadFile,
+    interaction_file: UploadFile,
+    content_schema: Dict[str, Any],
+    interaction_schema: Dict[str, Any],
+) -> models.RecommenderProject:
+    """Create a HYBRID project (content + interactions) and queue training."""
+    content_schema_json = json.dumps(content_schema)
+    interaction_schema_json = json.dumps(interaction_schema)
+    next_id = get_next_project_id(db)
+    db_project = models.RecommenderProject(
+        id=next_id,
+        owner_id=current_user_id,
+        project_name=project_name,
+        status=models.ProjectStatus.PENDING,
+        model_type=models.ModelType.HYBRID,
+    )
+    db.add(db_project)
+    db.commit()
+    db.refresh(db_project)
+    try:
+        await save_file_and_schema(
+            db, db_project.id, content_file, content_schema_json, models.FileType.CONTENT
+        )
+        await save_file_and_schema(
+            db, db_project.id, interaction_file, interaction_schema_json, models.FileType.INTERACTION
+        )
+    except Exception as e:
+        db_project.status = models.ProjectStatus.ERROR
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Error processing files: {e}")
+
+    background_db = database.SessionLocal()
+    background_tasks.add_task(process_project, db_project.id, background_db)
+    db.refresh(db_project)
+    return db_project
+
+
 # --- Background Task for Model Training (Updated) ---
 
 async def process_project(project_id: int, db: Session):
@@ -278,7 +695,13 @@ async def process_project(project_id: int, db: Session):
         all_schemas_map = {} 
         
         if content_file:
-            df_content = pd.read_csv(content_file.storage_path, low_memory=False)
+            cpath = _resolve_uploaded_file_path(content_file, db)
+            if not cpath:
+                raise Exception(
+                    f"Content CSV not found on disk (stored {content_file.storage_path!r}). "
+                    f"Copy the file to {USER_UPLOADS_DIR!r} as {os.path.basename(str(content_file.storage_path))!r} or re-upload."
+                )
+            df_content = pd.read_csv(cpath, low_memory=False)
             content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key != 'feature_col' and (s.user_csv_column or '').strip()}
             content_schema['feature_cols'] = [s.user_csv_column for s in content_file.schema_mappings if s.app_schema_key == 'feature_col' and (s.user_csv_column or '').strip()]
             if 'target_column' not in content_schema:
@@ -289,7 +712,13 @@ async def process_project(project_id: int, db: Session):
             all_schemas_map['content'] = content_schema
 
         if interaction_file:
-            df_interaction = pd.read_csv(interaction_file.storage_path)
+            ipath = _resolve_uploaded_file_path(interaction_file, db)
+            if not ipath:
+                raise Exception(
+                    f"Interaction CSV not found on disk (stored {interaction_file.storage_path!r}). "
+                    f"Copy the file to {USER_UPLOADS_DIR!r} as {os.path.basename(str(interaction_file.storage_path))!r} or re-upload."
+                )
+            df_interaction = pd.read_csv(ipath)
             schema_map = {s.app_schema_key: s.user_csv_column for s in interaction_file.schema_mappings}
             if schema_map.get('user_id'):
                 df_interaction[schema_map['user_id']] = df_interaction[schema_map['user_id']].astype(str)
@@ -604,9 +1033,10 @@ def delete_project(
 ):
     db_project = get_project_for_user(project_id, current_user_id, db)
     for f in db_project.uploaded_files:
-        if f.storage_path and os.path.isfile(f.storage_path):
+        resolved = _resolve_uploaded_file_path(f, db=None)
+        if resolved and os.path.isfile(resolved):
             try:
-                os.remove(f.storage_path)
+                os.remove(resolved)
             except OSError:
                 pass
     db.delete(db_project)
@@ -622,8 +1052,22 @@ def get_project_data(project_id: int, user_id: int, db: Session, file_type: mode
     file = next((f for f in db_project.uploaded_files if f.file_type == file_type), None)
     if not file:
         raise HTTPException(status_code=404, detail=f"{file_type} file not found for this project.")
-        
-    df = pd.read_csv(file.storage_path, low_memory=False)
+
+    path = _resolve_uploaded_file_path(file, db)
+    if not path:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Uploaded CSV file is missing from disk for this project. "
+                "The database may point to another machine (shared Neon DB) or an old folder. "
+                f"Stored path: {file.storage_path!r}. "
+                f"Expected CSV basename: {os.path.basename(os.path.normpath(str(file.storage_path or '')))!r} "
+                f"under {USER_UPLOADS_DIR!r}, or set USER_UPLOADS_DIR / USER_UPLOADS_FALLBACK_DIRS in .env. "
+                "Otherwise re-upload the project or create a new project with the same CSVs."
+            ),
+        )
+
+    df = pd.read_csv(path, low_memory=False)
     schema = {s.app_schema_key: s.user_csv_column for s in file.schema_mappings}
     return df, schema
 
@@ -668,7 +1112,17 @@ def get_project_target_values(
     if not content_file:
         raise HTTPException(status_code=404, detail="Content file not found.")
     content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings}
-    df = pd.read_csv(content_file.storage_path, low_memory=False)
+    cpath = _resolve_uploaded_file_path(content_file, db)
+    if not cpath:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Uploaded CSV file is missing from disk for this project. "
+                f"Look for basename {os.path.basename(str(content_file.storage_path or ''))!r} under {USER_UPLOADS_DIR!r} "
+                "or re-upload / retrain."
+            ),
+        )
+    df = pd.read_csv(cpath, low_memory=False)
     target_col, target_values = _resolve_target_column_and_values(df, content_schema)
     if not target_col:
         raise HTTPException(status_code=400, detail="Schema is missing target_column or item_title.")
@@ -688,6 +1142,8 @@ def get_project_items(
         items_df = df[[id_col, title_col]].drop_duplicates().head(ITEMS_USERS_LIMIT)
         items = [{"id": str(row[id_col]), "title": str(row[title_col])} for row in items_df.to_dict("records")]
         return items
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading items: {e}")
 
@@ -702,6 +1158,8 @@ def get_project_users(
         user_col = schema['user_id']
         users_series = df[user_col].drop_duplicates().astype(str).head(ITEMS_USERS_LIMIT)
         return [{"id": u} for u in users_series.tolist()]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading users: {e}")
 
@@ -729,8 +1187,20 @@ def get_project_context_options(
         interaction_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.INTERACTION), None)
         if not interaction_file:
             raise HTTPException(status_code=404, detail="Hybrid project requires both content and ratings files.")
-        df_content = pd.read_csv(content_file.storage_path, low_memory=False)
-        df_interaction = pd.read_csv(interaction_file.storage_path, low_memory=False)
+        cpath = _resolve_uploaded_file_path(content_file, db)
+        ipath = _resolve_uploaded_file_path(interaction_file, db)
+        if not cpath:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Content CSV missing on disk (stored {content_file.storage_path!r}). Place file under {USER_UPLOADS_DIR!r} or retrain.",
+            )
+        if not ipath:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interaction CSV missing on disk (stored {interaction_file.storage_path!r}). Place file under {USER_UPLOADS_DIR!r} or retrain.",
+            )
+        df_content = pd.read_csv(cpath, low_memory=False)
+        df_interaction = pd.read_csv(ipath, low_memory=False)
         interaction_schema = {s.app_schema_key: s.user_csv_column for s in interaction_file.schema_mappings}
         if "item_id" not in interaction_schema or "rating" not in interaction_schema:
             raise HTTPException(status_code=400, detail="Ratings file must have item_id and rating mapped.")
@@ -747,7 +1217,13 @@ def get_project_context_options(
             content_feature_cols = [c for c in df_content.columns if c != target_col and c != content_key]
         feature_cols = [c for c in content_feature_cols if c in df.columns] + ["mean_rating"]
     else:
-        df = pd.read_csv(content_file.storage_path, low_memory=False)
+        cpath = _resolve_uploaded_file_path(content_file, db)
+        if not cpath:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Content CSV missing on disk (stored {content_file.storage_path!r}). Place file under {USER_UPLOADS_DIR!r} or retrain.",
+            )
+        df = pd.read_csv(cpath, low_memory=False)
         feature_cols = content_feature_cols
         if not feature_cols:
             feature_cols = [c for c in df.columns if c != target_col]
@@ -865,3 +1341,684 @@ def get_recommendations(
     except Exception as e:
         print(f"Error loading model or predicting: {e}")
         raise HTTPException(status_code=500, detail=f"Error generating recommendations: {e}")
+
+
+# =========================
+# Agent layer (no extra ports)
+# =========================
+
+class AgentDomainRecommendRequest(BaseModel):
+    project_id: int
+    context: Dict[str, Any] = {}
+    item_title: Optional[str] = None
+    user_id: Optional[str] = None
+    n: int = 10
+
+
+class AgentOrchestrateRequest(BaseModel):
+    correlation_id: Optional[str] = None
+    goal: Optional[str] = None
+    context: Dict[str, Any] = {}
+    n: int = 10
+    # Explicit ordering/selection; if omitted we'll infer from `context`
+    domains: List[str] = []
+    # Optional: domain_slug -> backend/back2 project_id
+    # If omitted, we auto-pick READY projects whose `project_name` contains the domain slug.
+    project_id_map: Dict[str, int] = {}
+
+
+class AgentSingleRecommendRequest(BaseModel):
+    """
+    User-facing recommendation endpoint:
+    - User provides `context` attributes
+    - Backend infers relevant domain(s) (or uses `target_domain` if provided)
+    - Backend auto-picks the best READY project per domain (no project selection needed)
+    """
+
+    correlation_id: Optional[str] = None
+    context: Dict[str, Any] = {}
+    n: int = 10
+    target_domain: Optional[str] = None
+    item_title: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+def _infer_domains_from_context(context: Dict[str, Any]) -> List[str]:
+    keys = {str(k) for k in (context or {}).keys()}
+    # If user provides explicit canonical IDs, trust those.
+    if "material_id" in keys:
+        return ["supply_chain_materials"]
+    if "sku_id" in keys:
+        return ["supply_chain_skus"]
+    if "supplier_id" in keys or "supplier_name" in keys:
+        return ["supply_chain_suppliers"]
+    if "warehouse_id" in keys:
+        return ["logistics_warehouses"]
+    if "lane_id" in keys:
+        return ["logistics_lanes"]
+
+    # Lanes: origin/dest geography pair.
+    if ("origin_region" in keys and "dest_region" in keys) or ("origin_country" in keys and "dest_country" in keys):
+        return ["logistics_lanes"]
+
+    # Warehouses: lead time + capacity variants tend to be warehouse-specific.
+    if "lead_time_days_receipt" in keys or "lead_time_days_ship" in keys or "capacity_volume_cbm" in keys:
+        return ["logistics_warehouses"]
+
+    # Carriers: mode + cost/reliability features.
+    carrier_signals = {
+        "carrier_type",
+        "capacity_type",
+        "tracking_available",
+        "temperature_controlled",
+        "hazardous_capable",
+        "avg_transit_days",
+        "reliability_score",
+        "on_time_pct_typical",
+        "cost_per_shipment_base",
+        "mode",
+        "region",
+        "country",
+        "certifications",
+    }
+    if len(keys.intersection(carrier_signals)) >= 2:
+        return ["logistics_carriers"]
+
+    # Suppliers: quality/reliability + risk.
+    supplier_signals = {"quality_score", "reliability_score", "risk_rating", "on_time_delivery_pct", "payment_terms"}
+    if len(keys.intersection(supplier_signals)) >= 2:
+        return ["supply_chain_suppliers"]
+
+    # Materials: spec/grade + shelf life + substitute IDs.
+    material_signals = {"material_type", "spec_grade", "shelf_life_days", "substitute_ids", "price_per_unit", "bom_parent_sku"}
+    if len(keys.intersection(material_signals)) >= 2:
+        return ["supply_chain_materials"]
+
+    # SKUs: demand/order/fill-rate type features.
+    sku_signals = {"abc_class", "demand_volatility", "reorder_point", "safety_stock", "demand_qty", "forecast_accuracy"}
+    if len(keys.intersection(sku_signals)) >= 2:
+        return ["supply_chain_skus"]
+
+    return []
+
+
+def _auto_pick_projects_for_domains(
+    *,
+    db: Session,
+    current_user_id: int,
+    domains: List[str],
+) -> Dict[str, int]:
+    """
+    Pick READY projects per domain.
+
+    Selection strategy (in order):
+    1) If project_name contains the domain slug, use it.
+    2) Otherwise, inspect the trained content schema mapping (`target_column`) and pick a
+       READY PARAMETER_DRIVEN/HYBRID project whose `target_column` matches the domain's expected target.
+
+    Prefers HYBRID -> PARAMETER_DRIVEN -> CONTENT -> COLLABORATIVE.
+    """
+    if not domains:
+        return {}
+
+    candidates = db.query(models.RecommenderProject).filter(
+        models.RecommenderProject.status == models.ProjectStatus.READY,
+        or_(
+            models.RecommenderProject.owner_id == current_user_id,
+            models.RecommenderProject.owner_id.is_(None),
+            models.RecommenderProject.owner_id == 0,
+        ),
+    ).all()
+
+    def _pref(mt: Any) -> int:
+        if str(mt) == str(models.ModelType.HYBRID):
+            return 0
+        if str(mt) == str(models.ModelType.PARAMETER_DRIVEN):
+            return 1
+        if str(mt) == str(models.ModelType.CONTENT):
+            return 2
+        if str(mt) == str(models.ModelType.COLLABORATIVE):
+            return 3
+        return 10
+
+    desired_target_by_domain = {
+        "logistics_carriers": "carrier_name",
+        "logistics_lanes": "lane_id",
+        "logistics_warehouses": "warehouse_id",
+        "supply_chain_suppliers": "supplier_name",
+        "supply_chain_materials": "material_id",
+        "supply_chain_skus": "sku_id",
+    }
+
+    # Precompute project -> target_columns (from uploaded content schema mapping)
+    candidate_ids = [int(p.id) for p in candidates]
+    project_target_columns: Dict[int, set[str]] = {pid: set() for pid in candidate_ids}
+    if candidate_ids:
+        target_rows = (
+            db.query(models.UploadedFile.project_id, models.SchemaMapping.user_csv_column)
+            .join(models.SchemaMapping, models.SchemaMapping.file_id == models.UploadedFile.id)
+            .filter(
+                models.UploadedFile.project_id.in_(candidate_ids),
+                models.UploadedFile.file_type == models.FileType.CONTENT,
+                models.SchemaMapping.app_schema_key == "target_column",
+            )
+            .all()
+        )
+        for pid, user_csv_column in target_rows:
+            try:
+                project_target_columns[int(pid)].add(str(user_csv_column))
+            except Exception:
+                continue
+
+    out: Dict[str, int] = {}
+    for domain_slug in domains:
+        domain_slug_l = str(domain_slug).lower()
+
+        # 1) Name match
+        domain_candidates = [p for p in candidates if domain_slug_l in str(p.project_name or "").lower()]
+
+        # 2) Target-column match
+        if not domain_candidates:
+            desired_target = desired_target_by_domain.get(domain_slug_l)
+            if desired_target:
+                domain_candidates = [
+                    p
+                    for p in candidates
+                    if desired_target in project_target_columns.get(int(p.id), set())
+                    and str(p.model_type) in (
+                        str(models.ModelType.PARAMETER_DRIVEN),
+                        str(models.ModelType.HYBRID),
+                    )
+                ]
+
+        # 3) Last resort: any trained project of relevant model types
+        if not domain_candidates:
+            domain_candidates = [
+                p
+                for p in candidates
+                if str(p.model_type) in (
+                    str(models.ModelType.PARAMETER_DRIVEN),
+                    str(models.ModelType.HYBRID),
+                )
+            ]
+
+        if not domain_candidates:
+            continue
+
+        domain_candidates.sort(key=lambda p: (_pref(p.model_type), -int(p.id)))
+        out[str(domain_slug)] = int(domain_candidates[0].id)
+
+    return out
+
+
+async def _predict_project(
+    *,
+    db: Session,
+    current_user_id: int,
+    project_id: int,
+    context: Dict[str, Any],
+    item_title: Optional[str],
+    user_id: Optional[str],
+    n: int,
+) -> Dict[str, Any]:
+    db_project = get_project_for_user(project_id, current_user_id, db)
+    if db_project.status != models.ProjectStatus.READY:
+        raise HTTPException(status_code=400, detail=f"Project status is {db_project.status}.")
+    if not db_project.mlflow_model_name:
+        raise HTTPException(status_code=404, detail="Model not found in registry.")
+
+    model_type = db_project.model_type
+
+    # Build input context depending on model type.
+    # For parameter-driven + hybrid: context keys must be feature columns.
+    reserved = {"user_id", "item_title", "n"}
+    feature_context = {k: v for k, v in (context or {}).items() if k not in reserved and v is not None and str(v).strip()}
+
+    local_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
+    if not os.path.isdir(local_model_path):
+        raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
+    model_uri = _path_to_file_uri(local_model_path)
+
+    model = mlflow.pyfunc.load_model(model_uri)
+
+    if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        row: Dict[str, Any] = {**feature_context, "n": n}
+        if item_title:
+            row["item_title"] = item_title
+        model_input = pd.DataFrame([row])
+    else:
+        # content or collaborative: wrapper expects both `item_title` and `user_id` keys (only relevant one is used).
+        if model_type == models.ModelType.CONTENT and not item_title:
+            raise HTTPException(status_code=400, detail="item_title is required for this content-based model.")
+        if model_type == models.ModelType.COLLABORATIVE and not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required for this collaborative model.")
+        model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
+
+    result_json = model.predict(model_input)[0]
+    result = json.loads(result_json)
+
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    recs = result.get("recommendations")
+    if recs is None or not isinstance(recs, list):
+        recs = []
+
+    return {
+        "model_type": str(model_type),
+        "recommendations": recs,
+        "input_item_title": item_title,
+        "input_user_id": user_id,
+    }
+
+
+@app.post("/agent/v1/domain/{domain_slug}/recommend")
+async def agent_domain_recommend(
+    domain_slug: str,
+    req: AgentDomainRecommendRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    pred = await _predict_project(
+        db=db,
+        current_user_id=current_user_id,
+        project_id=req.project_id,
+        context=req.context,
+        item_title=req.item_title,
+        user_id=req.user_id,
+        n=req.n,
+    )
+
+    return {
+        "domain_slug": domain_slug,
+        "project_id": req.project_id,
+        **pred,
+    }
+
+
+@app.post("/agent/v1/orchestrate")
+async def agent_orchestrate(
+    req: AgentOrchestrateRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    domains = req.domains or _infer_domains_from_context(req.context)
+
+    # Auto-pick project_id_map if not provided (or empty).
+    project_id_map: Dict[str, int] = dict(req.project_id_map or {})
+    if not project_id_map:
+        project_id_map = _auto_pick_projects_for_domains(
+            db=db,
+            current_user_id=current_user_id,
+            domains=domains,
+        )
+    else:
+        # Allow partial overrides: fill missing domains from auto-pick.
+        missing = [d for d in domains if d not in project_id_map or not project_id_map.get(d)]
+        if missing:
+            picked = _auto_pick_projects_for_domains(
+                db=db,
+                current_user_id=current_user_id,
+                domains=missing,
+            )
+            project_id_map.update(picked)
+
+    if not project_id_map:
+        raise HTTPException(
+            status_code=400,
+            detail="No trained READY project found for the requested domain(s). Train projects in Recommender Studio and try again.",
+        )
+
+    results: List[Dict[str, Any]] = []
+
+    # Deterministic order: domains in request order (or inferred order)
+    for domain_slug in domains:
+        domain_key = str(domain_slug)
+        if domain_key not in project_id_map:
+            continue
+        project_id = project_id_map[domain_key]
+
+        # Forward explicit seeds if provided in context.
+        # This keeps the orchestrator UI flexible: it can pass `item_title` / `user_id` either as top-level
+        # fields (not in our request schema) or inside `context`.
+        item_title = req.context.get("item_title") if isinstance(req.context, dict) else None
+        user_id = req.context.get("user_id") if isinstance(req.context, dict) else None
+
+        # Feature context should not include seed keys.
+        feature_context = dict(req.context or {})
+        feature_context.pop("item_title", None)
+        feature_context.pop("user_id", None)
+
+        pred = await _predict_project(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=project_id,
+            context=feature_context,
+            item_title=item_title,
+            user_id=user_id,
+            n=req.n,
+        )
+
+        results.append(
+            {
+                "domain_slug": domain_slug,
+                "project_id": project_id,
+                **pred,
+            }
+        )
+
+    return {"correlation_id": req.correlation_id, "results": results}
+
+
+@app.post("/agent/v1/recommend")
+async def agent_single_recommend(
+    req: AgentSingleRecommendRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    domains = [req.target_domain] if req.target_domain else _infer_domains_from_context(req.context)
+    if not domains:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not infer domain from context. Provide target_domain or include domain-relevant attribute keys.",
+        )
+
+    project_id_map = _auto_pick_projects_for_domains(
+        db=db,
+        current_user_id=current_user_id,
+        domains=[str(d) for d in domains],
+    )
+    if not project_id_map:
+        candidates = db.query(models.RecommenderProject).filter(
+            models.RecommenderProject.status == models.ProjectStatus.READY,
+            or_(
+                models.RecommenderProject.owner_id == current_user_id,
+                models.RecommenderProject.owner_id.is_(None),
+                models.RecommenderProject.owner_id == 0,
+            ),
+        ).all()
+        sample = [{"id": int(p.id), "name": p.project_name, "model_type": p.model_type} for p in candidates[:10]]
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No trained READY project found for inferred domain(s): {domains}. "
+                f"Ready projects in DB (sample): {sample}. "
+                f"Make sure you trained parameter-driven/hybrid projects with correct `target_column` mappings "
+                f"(e.g. logistics_carriers -> carrier_name, logistics_lanes -> lane_id, logistics_warehouses -> warehouse_id, "
+                f"supply_chain_suppliers -> supplier_name, supply_chain_materials -> material_id, supply_chain_skus -> sku_id)."
+            ),
+        )
+
+    results: List[Dict[str, Any]] = []
+    for domain_slug in domains:
+        domain_key = str(domain_slug)
+        if domain_key not in project_id_map:
+            continue
+        project_id = project_id_map[domain_key]
+
+        pred = await _predict_project(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=project_id,
+            context=req.context,
+            item_title=req.item_title,
+            user_id=req.user_id,
+            n=req.n,
+        )
+        results.append(
+            {
+                "domain_slug": domain_slug,
+                "project_id": project_id,
+                **pred,
+            }
+        )
+
+    return {"correlation_id": req.correlation_id, "results": results}
+
+
+@app.get("/agent/v1/presets")
+def agent_list_presets():
+    """List bundled agent datasets (CSV paths under backend/agent_datasets/)."""
+    presets: List[Dict[str, Any]] = []
+    for preset_id, cfg in AGENT_PRESETS.items():
+        content_csv = cfg.get("content_csv") or cfg.get("csv")
+        interaction_csv = cfg.get("interaction_csv")
+        path = os.path.join(AGENT_DATASETS_DIR, content_csv) if content_csv else ""
+        presets.append(
+            {
+                "preset": preset_id,
+                "domain_slug": cfg["domain_slug"],
+                "description": cfg["description"],
+                "content_csv": content_csv,
+                "interaction_csv": interaction_csv,
+                "available": os.path.isfile(path),
+            }
+        )
+    return {"presets": presets}
+
+
+@app.get("/agent/v1/context-options", response_model=schemas.AgentContextOptionsResponse)
+def agent_context_options_by_domain(
+    domain_slug: str,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Context sliders / categorical values for the auto-selected READY project for this domain
+    (same payload as /project/{id}/context-options, plus project_id).
+    """
+    picked = _auto_pick_projects_for_domains(
+        db=db,
+        current_user_id=current_user_id,
+        domains=[str(domain_slug)],
+    )
+    pid = picked.get(str(domain_slug))
+    if not pid:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No READY trained model for domain '{domain_slug}'. "
+                "Train with POST /agent/v1/train-preset or upload via /agent/v1/train-upload."
+            ),
+        )
+    inner = get_project_context_options(project_id=int(pid), current_user_id=current_user_id, db=db)
+    return schemas.AgentContextOptionsResponse(
+        project_id=int(pid),
+        domain_slug=str(domain_slug),
+        target_column=inner.target_column,
+        feature_columns=inner.feature_columns,
+        target_values=inner.target_values,
+    )
+
+
+@app.post("/agent/v1/train-preset", response_model=schemas.RecommenderProject)
+async def agent_train_preset(
+    background_tasks: BackgroundTasks,
+    preset: str = Form(...),
+    project_name: str = Form(""),
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Train a parameter-driven model from a bundled CSV in backend/agent_datasets/."""
+    cfg = AGENT_PRESETS.get(preset)
+    if not cfg:
+        raise HTTPException(status_code=400, detail=f"Unknown preset: {preset}")
+    content_csv = cfg.get("content_csv") or cfg.get("csv")
+    if not content_csv:
+        raise HTTPException(status_code=400, detail=f"Preset '{preset}' missing content_csv.")
+
+    content_path = os.path.join(AGENT_DATASETS_DIR, content_csv)
+    if not os.path.isfile(content_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dataset file missing on server: {content_path}",
+        )
+
+    pn = (project_name or "").strip() or f"{preset}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    with open(content_path, "rb") as f:
+        data = f.read()
+    content_buf = io.BytesIO(data)
+    content_upload = UploadFile(filename=os.path.basename(content_path), file=content_buf)
+
+    interaction_csv = cfg.get("interaction_csv")
+    if interaction_csv:
+        interaction_path = os.path.join(AGENT_DATASETS_DIR, interaction_csv)
+        if not os.path.isfile(interaction_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interaction dataset file missing on server: {interaction_path}",
+            )
+        with open(interaction_path, "rb") as f:
+            idata = f.read()
+        interaction_buf = io.BytesIO(idata)
+        interaction_upload = UploadFile(filename=os.path.basename(interaction_path), file=interaction_buf)
+
+        return await _create_hybrid_project_from_uploads(
+            background_tasks=background_tasks,
+            current_user_id=current_user_id,
+            db=db,
+            project_name=pn,
+            content_file=content_upload,
+            interaction_file=interaction_upload,
+            content_schema=dict(cfg["content_schema"]),
+            interaction_schema=dict(cfg["interaction_schema"]),
+        )
+
+    return await _create_parameter_driven_project_from_upload(
+        background_tasks=background_tasks,
+        current_user_id=current_user_id,
+        db=db,
+        project_name=pn,
+        content_file=content_upload,
+        content_schema=dict(cfg["content_schema"]),
+    )
+
+
+@app.post("/agent/v1/train-upload", response_model=schemas.RecommenderProject)
+async def agent_train_upload(
+    background_tasks: BackgroundTasks,
+    domain: str = Form(...),
+    project_name: str = Form(""),
+    content_file: UploadFile = File(...),
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Train using the same schema as a known domain (columns must match the bundled template).
+    `domain` is `logistics_carriers` or `supply_chain_suppliers`.
+    """
+    cfg = AGENT_PRESETS.get(domain)
+    if not cfg:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown domain: {domain}. Use one of: "
+                "logistics_carriers, logistics_lanes, logistics_warehouses, "
+                "supply_chain_suppliers, supply_chain_materials, supply_chain_skus."
+            ),
+        )
+    pn = (project_name or "").strip() or f"{domain}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+    return await _create_parameter_driven_project_from_upload(
+        background_tasks=background_tasks,
+        current_user_id=current_user_id,
+        db=db,
+        project_name=pn,
+        content_file=content_file,
+        content_schema=dict(cfg["content_schema"]),
+    )
+
+
+@app.post("/agent/v1/train-logistics-all")
+async def agent_train_logistics_all(
+    background_tasks: BackgroundTasks,
+    project_name_prefix: str = Form("logistics"),
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Train all 3 logistics HYBRID recommenders (carriers + lanes + warehouses)
+    using bundled CSVs from `backend/agent_datasets/`.
+    """
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    created: List[Dict[str, Any]] = []
+    for domain_slug in ["logistics_carriers", "logistics_lanes", "logistics_warehouses"]:
+        cfg = AGENT_PRESETS.get(domain_slug)
+        if not cfg:
+            continue
+        content_csv = cfg.get("content_csv") or cfg.get("csv")
+        interaction_csv = cfg.get("interaction_csv")
+        if not content_csv or not interaction_csv:
+            raise HTTPException(status_code=400, detail=f"Preset '{domain_slug}' must include content_csv and interaction_csv.")
+
+        content_path = os.path.join(AGENT_DATASETS_DIR, content_csv)
+        interaction_path = os.path.join(AGENT_DATASETS_DIR, interaction_csv)
+        if not os.path.isfile(content_path):
+            raise HTTPException(status_code=404, detail=f"Missing dataset on server: {content_path}")
+        if not os.path.isfile(interaction_path):
+            raise HTTPException(status_code=404, detail=f"Missing interaction dataset on server: {interaction_path}")
+
+        with open(content_path, "rb") as f:
+            content_data = f.read()
+        with open(interaction_path, "rb") as f:
+            interaction_data = f.read()
+
+        content_upload = UploadFile(filename=os.path.basename(content_path), file=io.BytesIO(content_data))
+        interaction_upload = UploadFile(filename=os.path.basename(interaction_path), file=io.BytesIO(interaction_data))
+
+        proj_name = f"{project_name_prefix}_{domain_slug}_{ts}"
+        db_project = await _create_hybrid_project_from_uploads(
+            background_tasks=background_tasks,
+            current_user_id=current_user_id,
+            db=db,
+            project_name=proj_name,
+            content_file=content_upload,
+            interaction_file=interaction_upload,
+            content_schema=dict(cfg["content_schema"]),
+            interaction_schema=dict(cfg["interaction_schema"]),
+        )
+        created.append({"id": db_project.id, "domain_slug": domain_slug, "status": str(db_project.status)})
+
+    return {"created": created, "bundle": "logistics_all"}
+
+
+@app.post("/agent/v1/train-logistics-upload")
+async def agent_train_logistics_upload(
+    background_tasks: BackgroundTasks,
+    project_name_prefix: str = Form("logistics"),
+    carriers_content_file: UploadFile = File(...),
+    carriers_interactions_file: UploadFile = File(...),
+    lanes_content_file: UploadFile = File(...),
+    lanes_interactions_file: UploadFile = File(...),
+    warehouses_content_file: UploadFile = File(...),
+    warehouses_interactions_file: UploadFile = File(...),
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Train all 3 logistics HYBRID recommenders from user-uploaded CSVs.
+    Upload templates must match the bundled dataset column names.
+    """
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    created: List[Dict[str, Any]] = []
+    domain_to_files = {
+        "logistics_carriers": (carriers_content_file, carriers_interactions_file),
+        "logistics_lanes": (lanes_content_file, lanes_interactions_file),
+        "logistics_warehouses": (warehouses_content_file, warehouses_interactions_file),
+    }
+    for domain_slug, (content_file, interaction_file) in domain_to_files.items():
+        cfg = AGENT_PRESETS.get(domain_slug)
+        if not cfg:
+            continue
+        proj_name = f"{project_name_prefix}_{domain_slug}_{ts}"
+        db_project = await _create_hybrid_project_from_uploads(
+            background_tasks=background_tasks,
+            current_user_id=current_user_id,
+            db=db,
+            project_name=proj_name,
+            content_file=content_file,
+            interaction_file=interaction_file,
+            content_schema=dict(cfg["content_schema"]),
+            interaction_schema=dict(cfg["interaction_schema"]),
+        )
+        created.append({"id": db_project.id, "domain_slug": domain_slug, "status": str(db_project.status)})
+    return {"created": created, "bundle": "logistics_upload"}

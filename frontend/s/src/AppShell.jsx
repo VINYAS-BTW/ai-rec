@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import RecommenderPanel from "./components/RecommenderPanel";
 import Dashboard from "./pages/Dashboard";
+import DomainAgents from "./pages/DomainAgents";
+import SuperAgent from "./pages/SuperAgent";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
@@ -19,6 +21,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Sparkles,
+  Boxes,
   Menu,
   X,
 } from "lucide-react";
@@ -38,6 +41,18 @@ const NAV_ITEMS = [
     label: "Recommender Studio",
     icon: Activity,
     description: "Create projects & train models",
+  },
+  {
+    id: "domain_agents",
+    label: "Logistics & supply",
+    icon: Boxes,
+    description: "Train & recommend (carriers, lanes, warehouses)",
+  },
+  {
+    id: "superagent",
+    label: "Super agent",
+    icon: Sparkles,
+    description: "Chat → intent → recommend",
   },
   {
     id: "dashboard",
@@ -441,6 +456,13 @@ const HomeOverview = ({ onNavigate, summary }) => {
                 description="Train a new recommender model"
                 Icon={Zap}
                 onClick={() => onNavigate("recommender")}
+                gradient="from-rose-600 to-cyan-600"
+              />
+              <QuickActionCard
+                title="Logistics & supply"
+                description="Domain agents: carriers, lanes, warehouses"
+                Icon={Boxes}
+                onClick={() => onNavigate("domain_agents")}
                 gradient="from-rose-600 to-cyan-600"
               />
               <QuickActionCard
@@ -1543,6 +1565,10 @@ export default function AppShell() {
         return <HomeOverview onNavigate={setActiveTab} summary={summary} />;
       case "recommender":
         return <RecommenderPanel />;
+      case "domain_agents":
+        return <DomainAgents />;
+      case "superagent":
+        return <SuperAgent />;
       case "dashboard":
         return <Dashboard />;
       case "analytics":

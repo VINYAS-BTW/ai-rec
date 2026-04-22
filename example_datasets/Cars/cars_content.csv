@@ -1,0 +1,13 @@
+item_id,item_title,brand,model,year,fuel_type,body_style,transmission,category
+C001,Toyota Camry,Toyota,Camry,2019,Petrol,Sedan,Automatic,Sedan
+C002,Honda City,Honda,City,2018,Petrol,Sedan,Manual,Sedan
+C003,Hyundai i10,Hyundai,i10,2020,Petrol,Hatchback,Manual,Hatchback
+C004,Tata Nexon,Tata,Nexon,2021,Diesel,SUV,Automatic,SUV
+C005,Mahindra XUV300,Mahindra,XUV300,2017,Diesel,SUV,Manual,SUV
+C006,BMW X3,BMW,X3,2020,Petrol,SUV,Automatic,SUV
+C007,Audi Q3,Audi,Q3,2019,Petrol,SUV,Automatic,SUV
+C008,Renault Kwid,Renault,Kwid,2016,Petrol,Hatchback,Manual,Hatchback
+C009,Ford EcoSport,Ford,EcoSport,2018,Diesel,SUV,Automatic,SUV
+C010,Kia Seltos,Kia,Seltos,2022,Petrol,SUV,Automatic,SUV
+C011,Volkswagen Polo,Volkswagen,Polo,2017,Petrol,Hatchback,Manual,Hatchback
+C012,Skoda Octavia,Skoda,Octavia,2019,Petrol,Sedan,Automatic,Sedan
