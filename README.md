@@ -1,6 +1,6 @@
 # AiREC-BaaS
 
-A full-stack **recommendation platform (backend-as-a-service)** with ML models (parameter-driven, content-based, collaborative, hybrid), webhook notifications, and auth. **Dataset-agnostic:** upload any CSV from any domain, choose what to recommend and which columns to use; the system works the same for cars, products, movies, or any other tabular data. Train models, register apps with API keys, and get recommendations via the web UI or REST API.
+A full-stack **recommendation platform (backend-as-a-service)** with ML models (parameter-driven, content-based, collaborative, hybrid), webhook notifications, auth, and an **agent layer** (domain agents + SuperAgent chat orchestration). **Dataset-agnostic:** upload any CSV from any domain, choose what to recommend and which columns to use; the system works the same for cars, products, movies, or any other tabular data. Train models, register apps with API keys, and get recommendations via the web UI or REST API.
 
 **System design:** See **[ARCHITECTURE.md](ARCHITECTURE.md)** for flows, services, database schemas, and data flow.
 
@@ -21,9 +21,12 @@ ai-rec/
 ├── backend/
 │   ├── auth/              # Auth API (login, signup, JWT); Drizzle ORM
 │   ├── back2/             # FastAPI ML recommender + MLflow; SQLAlchemy
+│   ├── agent_service/     # Optional standalone agent layer (FastAPI)
+│   ├── agent_datasets/    # Preset CSV templates for domain agents
 │   └── webhooks_services/ # App registration + webhooks + recommend proxy; Drizzle ORM
 ├── frontend/s/            # React (Vite) dashboard
-├── xternal_client/        # Demo clients (MovieRec, MusicRec)
+├── external_client/       # Demo clients
+├── xternal_client/        # Legacy demo clients (MovieRec, MusicRec)
 ├── scripts/               # One-time DB schema setup (Neon)
 └── example_datasets/      # Sample CSVs for movies/songs
 ```
@@ -130,7 +133,7 @@ Create the schemas manually or run the same script with your local `DATABASE_URL
 
 ---
 
-## Run the app (4 terminals)
+## Run the app (5 terminals + optional)
 
 ### Terminal 1 – Auth
 
@@ -173,7 +176,17 @@ npm run dev
 
 → **http://localhost:5173**
 
-### Terminal 5 (optional) – MLflow UI
+### Terminal 5 – Agent service (optional but recommended for full agent architecture)
+
+```bash
+cd backend/agent_service
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8002
+```
+
+→ **http://localhost:8002**
+
+### Terminal 6 (optional) – MLflow UI
 
 ```bash
 cd backend/back2
@@ -197,6 +210,20 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
    `POST http://localhost:3001/api/recommend`  
    Headers: `Content-Type: application/json`, `x-api-key: YOUR_API_KEY`  
    Body: `{ "project_id": 1, "item_title": "Some Movie", "user_id": "123" }` (omit `user_id` for content-only; omit `item_title` for collaborative-only).
+6. **Domain Agents page:** Train and query domain presets (logistics/supply-chain) from the frontend using `/agent/v1/*` endpoints in `back2`.
+7. **SuperAgent page:** Chat-style recommendation orchestration using `POST /superagent/v1/chat` with session memory and clarification prompts.
+
+---
+
+## Implemented now (current state)
+
+- **Core recommendation engine:** parameter-driven, content-based, collaborative, and hybrid training + inference.
+- **Project lifecycle APIs:** create project, retrain, status, list, delete, context options, and recommendation retrieval.
+- **Agent endpoints in `back2`:** domain recommend, orchestrate across domains, preset listing, context options, and preset/upload training flows.
+- **SuperAgent MVP in `back2`:** intent/domain inference from text, key/value context extraction, top-k inference, session memory, and clarify-first chat responses.
+- **Webhook gateway:** app registration, API key validation, recommendation proxying, usage tracking, and async webhook pushes.
+- **Frontend modules:** Recommender Studio, Domain Agents, SuperAgent chat, and Webhook Dashboard.
+- **Auth:** email/password + Google OAuth routes with JWT verification on protected recommendation endpoints.
 
 ---
 
@@ -214,6 +241,7 @@ To run with a static server: `npx serve xternal_client/MovieRec`.
 |----------------|------|----------------------------|
 | Auth           | 8080 | Login, signup, JWT         |
 | ML recommender | 8000 | Projects, train, recommend |
+| Agent service  | 8002 | Optional agent layer API   |
 | Webhooks       | 3001 | Apps, API key, recommend   |
 | Frontend       | 5173 | React UI                   |
 | MLflow UI      | 5000 | Optional model registry    |
