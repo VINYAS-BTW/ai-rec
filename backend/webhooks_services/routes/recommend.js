@@ -4,6 +4,7 @@ import { apps, usage } from "../db/schema.js";
 import { eq, sql } from "drizzle-orm";
 import axios from "axios";
 import { emitEvent } from "../kafka/producer.js";
+import { cacheGetOrSet } from "../utils/cache.js";
 
 const router = express.Router();
 
@@ -20,7 +21,11 @@ router.post("/", async (req, res) => {
 
   try {
     console.log("🔑 Validating API key...");
-    const rows = await db.select().from(apps).where(eq(apps.api_key, apiKey)).limit(1);
+    const rows = await db
+      .select()
+      .from(apps)
+      .where(eq(apps.api_key, apiKey))
+      .limit(1);
     const app = rows[0] ?? null;
     if (!app) {
       console.log("❌ Invalid API key");
@@ -39,9 +44,14 @@ router.post("/", async (req, res) => {
       headers["X-Internal-Key"] = process.env.BACK2_INTERNAL_KEY;
     }
 
-    console.log("📡 Calling FastAPI:", fastapiUrl, params);
-    const recRes = await axios.get(fastapiUrl, { params, headers });
-    const recData = recRes.data;
+    const recData = await cacheGetOrSet(
+      { project_id, item_title, user_id },
+      async () => {
+        console.log("📡 Calling FastAPI:", fastapiUrl, params);
+        const recRes = await axios.get(fastapiUrl, { params, headers });
+        return recRes.data;
+      },
+    );
     console.log("✅ FastAPI response:", Object.keys(recData));
 
     await db
@@ -61,29 +71,45 @@ router.post("/", async (req, res) => {
       app_name: app.app_name,
       _raw_api_key: req.rawApiKey || apiKey || null,
       session_id: req.body.session_id || req.headers["x-session-id"] || null,
-      correlation_id: req.body.correlation_id || req.headers["x-correlation-id"] || null,
-      recommendation_count: (recData.recommendations || recData.data?.recommendations || []).length,
-      recommendations_preview: (recData.recommendations || recData.data?.recommendations || []).slice(0, 5).map((r) => ({
-        item_id: r.id || r.item_id || null,
-        title: r.title || null,
-        score: r.score ?? null,
-      })),
+      correlation_id:
+        req.body.correlation_id || req.headers["x-correlation-id"] || null,
+      recommendation_count: (
+        recData.recommendations ||
+        recData.data?.recommendations ||
+        []
+      ).length,
+      recommendations_preview: (
+        recData.recommendations ||
+        recData.data?.recommendations ||
+        []
+      )
+        .slice(0, 5)
+        .map((r) => ({
+          item_id: r.id || r.item_id || null,
+          title: r.title || null,
+          score: r.score ?? null,
+        })),
       metadata: { request_body_keys: Object.keys(req.body) },
-    }).catch(() => { /* already logged inside emitEvent */ });
+    }).catch(() => {
+      /* already logged inside emitEvent */
+    });
 
     res.json({
       success: true,
       app_name: app.app_name,
       model_type: recData.model_type || recData.data?.model_type || "content",
-      recommendations: recData.recommendations || recData.data?.recommendations || [],
+      recommendations:
+        recData.recommendations || recData.data?.recommendations || [],
     });
 
-    axios.post(app.webhook_url, {
-      success: true,
-      app_name: app.app_name,
-      model_type: recData.model_type || recData.data?.model_type || "content",
-      recommendations: recData.recommendations || recData.data?.recommendations || [],
-    })
+    axios
+      .post(app.webhook_url, {
+        success: true,
+        app_name: app.app_name,
+        model_type: recData.model_type || recData.data?.model_type || "content",
+        recommendations:
+          recData.recommendations || recData.data?.recommendations || [],
+      })
       .then(() => console.log(`✅ Webhook sent to ${app.webhook_url}`))
       .catch((err) => console.warn(`⚠️ Webhook push failed: ${err.message}`));
   } catch (err) {
@@ -97,7 +123,9 @@ router.post("/", async (req, res) => {
       if (status === 404) {
         return res.status(404).json({
           error: "Project not found or not ready",
-          details: errorData?.detail || "The project ID you specified doesn't exist or isn't ready",
+          details:
+            errorData?.detail ||
+            "The project ID you specified doesn't exist or isn't ready",
         });
       }
 
@@ -107,7 +135,9 @@ router.post("/", async (req, res) => {
       });
     }
 
-    res.status(500).json({ error: "Failed to get recommendations", details: err.message });
+    res
+      .status(500)
+      .json({ error: "Failed to get recommendations", details: err.message });
   }
 });
 

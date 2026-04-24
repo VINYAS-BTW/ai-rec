@@ -20,7 +20,11 @@ async function apiKeyMiddleware(req, res, next) {
   }
 
   try {
-    const rows = await db.select().from((await import("./db/schema.js")).apps).where(eq((await import("./db/schema.js")).apps.api_key, apiKey)).limit(1);
+    const rows = await db
+      .select()
+      .from((await import("./db/schema.js")).apps)
+      .where(eq((await import("./db/schema.js")).apps.api_key, apiKey))
+      .limit(1);
     const appRow = rows[0] ?? null;
     if (!appRow) {
       return res.status(403).json({ error: "Invalid API key" });
@@ -51,7 +55,9 @@ const allowedOrigins = [
   "http://127.0.0.1:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5174",
-  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim()) : []),
+  ...(process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
+    : []),
 ];
 app.use(
   cors({
@@ -62,7 +68,7 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Internal-Key"],
-  })
+  }),
 );
 app.use(bodyParser.json());
 
@@ -102,9 +108,13 @@ startServer().catch((err) => {
   console.error("Webhook service failed to start:", err.message);
   if (err.code) console.error("Code:", err.code);
   if (!process.env.DATABASE_URL) {
-    console.error("DATABASE_URL is not set. Create backend/webhooks_services/.env with DATABASE_URL=postgresql://...");
+    console.error(
+      "DATABASE_URL is not set. Create backend/webhooks_services/.env with DATABASE_URL=postgresql://...",
+    );
   } else if (err.code === "ENOTFOUND" || err.message.includes("getaddrinfo")) {
-    console.error("Database host could not be resolved. Check network and that Neon/PostgreSQL is reachable.");
+    console.error(
+      "Database host could not be resolved. Check network and that Neon/PostgreSQL is reachable.",
+    );
   }
   process.exit(1);
 });
