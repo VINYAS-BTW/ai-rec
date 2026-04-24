@@ -22,6 +22,10 @@ const ETL_RETRAIN_WINDOW_MINUTES = parseInt(process.env.ETL_RETRAIN_WINDOW_MINUT
 const ETL_RETRAIN_COOLDOWN_MINUTES = parseInt(process.env.ETL_RETRAIN_COOLDOWN_MINUTES || "180", 10);
 const BACK2_RETRAIN_URL = (process.env.BACK2_RETRAIN_URL || "http://localhost:8000").replace(/\/$/, "");
 const BACK2_INTERNAL_KEY = process.env.BACK2_INTERNAL_KEY || "";
+const STREAM_PROCESSOR_MODE = process.env.STREAM_PROCESSOR_MODE || "realtime-v2";
+const PARTITIONS_CONSUMED_CONCURRENTLY = parseInt(process.env.KAFKA_PARTITIONS_CONSUMED_CONCURRENTLY || "3", 10);
+const MAX_BATCH_MESSAGES = parseInt(process.env.KAFKA_MAX_BATCH_MESSAGES || "100", 10);
+const LAG_WARN_THRESHOLD = parseInt(process.env.KAFKA_LAG_WARN_THRESHOLD || "1000", 10);
 
 // ─── Postgres pool (reuses DATABASE_URL already used by webhooks service) ─────
 const db = new Pool({
@@ -371,13 +375,57 @@ async function sendToDLQ(rawValue, errorMessage, topic, partition, offset) {
   }
 }
 
+async function processMessage(topic, partition, message) {
+  const rawValue = message.value?.toString();
+  let event;
+  let shouldTriggerRetrain = false;
+
+  // ── Parse ─────────────────────────────────────────────────────────────
+  try {
+    event = JSON.parse(rawValue);
+  } catch (parseErr) {
+    console.error("[realtime-processor] Unparseable message — DLQ", { partition, offset: message.offset });
+    await sendToDLQ(rawValue, "JSON parse error: " + parseErr.message, topic, partition, message.offset);
+    return { success: true, shouldTriggerRetrain: false, projectId: null };
+  }
+
+  // ── Validate ──────────────────────────────────────────────────────────
+  const validationError = validateEvent(event);
+  if (validationError) {
+    console.warn("[realtime-processor] Validation failed — DLQ", { event_id: event.event_id, error: validationError });
+    await sendToDLQ(rawValue, "Validation: " + validationError, topic, partition, message.offset);
+    return { success: true, shouldTriggerRetrain: false, projectId: null };
+  }
+
+  // ── Persist + rollups (transactional) ─────────────────────────────────
+  shouldTriggerRetrain = await withTransaction(async (client) => {
+    const inserted = await persistEvent(client, event);
+    if (!inserted) {
+      return false;
+    }
+
+    await updateRollups(client, event);
+    return await maybeTriggerRetrain(client, event);
+  });
+
+  return {
+    success: true,
+    shouldTriggerRetrain,
+    projectId: event.project_id || null,
+  };
+}
+
 // ─── Main consumer loop ───────────────────────────────────────────────────────
 async function run() {
-  console.info("[consumer] Kafka startup config", {
+  console.info("[realtime-processor] Kafka startup config", {
     brokers: BROKERS,
     topic: TOPIC,
     dlqTopic: DLQ_TOPIC,
     groupId: GROUP_ID,
+    streamMode: STREAM_PROCESSOR_MODE,
+    partitionsConsumedConcurrently: PARTITIONS_CONSUMED_CONCURRENTLY,
+    maxBatchMessages: MAX_BATCH_MESSAGES,
+    lagWarnThreshold: LAG_WARN_THRESHOLD,
     saslUser: SASL_USER || null,
     saslMechanism: SASL_MECHANISM || null,
     ssl: SSL || !!sasl,
@@ -387,64 +435,58 @@ async function run() {
   await consumer.connect();
   await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
 
-  console.info("[consumer] Subscribed to topic:", TOPIC, "| group:", GROUP_ID);
+  console.info("[realtime-processor] Subscribed to topic:", TOPIC, "| group:", GROUP_ID);
 
   await consumer.run({
-    // Manual offset commit — autoCommit disabled implicitly when eachBatchAutoResolve is managed
     autoCommit: false,
-    eachMessage: async ({ topic, partition, message, heartbeat, commitOffsetsIfNecessary }) => {
-      const rawValue = message.value?.toString();
-      let event;
-      let shouldTriggerRetrain = false;
+    eachBatchAutoResolve: false,
+    partitionsConsumedConcurrently: PARTITIONS_CONSUMED_CONCURRENTLY,
+    eachBatch: async ({ batch, resolveOffset, heartbeat, isRunning, isStale, commitOffsetsIfNecessary }) => {
+      const highWatermark = Number(batch.highWatermark || 0);
+      const messages = batch.messages.slice(0, MAX_BATCH_MESSAGES);
 
-      // ── Parse ─────────────────────────────────────────────────────────────
-      try {
-        event = JSON.parse(rawValue);
-      } catch (parseErr) {
-        console.error("[consumer] Unparseable message — DLQ", { partition, offset: message.offset });
-        await sendToDLQ(rawValue, "JSON parse error: " + parseErr.message, topic, partition, message.offset);
-        // Commit to avoid re-processing poison pill
-        await consumer.commitOffsets([{ topic, partition, offset: String(Number(message.offset) + 1) }]);
-        return;
-      }
+      for (const message of messages) {
+        if (!isRunning() || isStale()) {
+          break;
+        }
 
-      // ── Validate ──────────────────────────────────────────────────────────
-      const validationError = validateEvent(event);
-      if (validationError) {
-        console.warn("[consumer] Validation failed — DLQ", { event_id: event.event_id, error: validationError });
-        await sendToDLQ(rawValue, "Validation: " + validationError, topic, partition, message.offset);
-        await consumer.commitOffsets([{ topic, partition, offset: String(Number(message.offset) + 1) }]);
-        return;
-      }
+        const offsetToCommit = String(Number(message.offset) + 1);
 
-      // ── Persist ───────────────────────────────────────────────────────────
-      try {
-        shouldTriggerRetrain = await withTransaction(async (client) => {
-          const inserted = await persistEvent(client, event);
-          if (!inserted) {
-            return false;
+        try {
+          const result = await processMessage(batch.topic, batch.partition, message);
+
+          // Commit after successful parse/validate/persist-or-DLQ handling.
+          await consumer.commitOffsets([{ topic: batch.topic, partition: batch.partition, offset: offsetToCommit }]);
+          resolveOffset(message.offset);
+
+          if (result.shouldTriggerRetrain && result.projectId) {
+            triggerRetrain(result.projectId);
           }
+        } catch (dbErr) {
+          console.error("[realtime-processor] DB write failed — message will be retried", {
+            partition: batch.partition,
+            offset: message.offset,
+            error: dbErr.message,
+          });
+          throw dbErr;
+        }
 
-          await updateRollups(client, event);
-          return await maybeTriggerRetrain(client, event);
-        });
-        // Commit offset ONLY after successful DB write
-        await consumer.commitOffsets([{ topic, partition, offset: String(Number(message.offset) + 1) }]);
-      } catch (dbErr) {
-        // Retryable DB error — do NOT commit offset; KafkaJS will redeliver
-        console.error("[consumer] DB write failed — will retry on restart", {
-          event_id: event.event_id,
-          error: dbErr.message,
-        });
-        // Re-throw so KafkaJS retries this message (offset not committed)
-        throw dbErr;
+        const committedOffset = Number(offsetToCommit);
+        const lag = highWatermark > committedOffset ? highWatermark - committedOffset : 0;
+        if (lag >= LAG_WARN_THRESHOLD) {
+          console.warn("[realtime-processor] Consumer lag threshold exceeded", {
+            topic: batch.topic,
+            partition: batch.partition,
+            lag,
+            highWatermark,
+            committedOffset,
+          });
+        }
+
+        await heartbeat();
       }
 
-      if (shouldTriggerRetrain) {
-        triggerRetrain(event.project_id);
-      }
-
-      await heartbeat(); // keep consumer alive during slow DB ops
+      await commitOffsetsIfNecessary();
     },
   });
 }
@@ -455,15 +497,15 @@ let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.info(`[consumer] ${signal} received — shutting down gracefully`);
+  console.info(`[realtime-processor] ${signal} received — shutting down gracefully`);
   try {
     await consumer.disconnect();
     await dlqProducer.disconnect();
     await db.end();
-    console.info("[consumer] Clean shutdown complete");
+    console.info("[realtime-processor] Clean shutdown complete");
     process.exit(0);
   } catch (err) {
-    console.error("[consumer] Error during shutdown:", err.message);
+    console.error("[realtime-processor] Error during shutdown:", err.message);
     process.exit(1);
   }
 }
@@ -473,7 +515,7 @@ process.on("SIGINT",  () => shutdown("SIGINT"));
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 run().catch((err) => {
-  console.error("[consumer] Fatal startup error:", err.message);
+  console.error("[realtime-processor] Fatal startup error:", err.message);
   process.exit(1);
 });
 

@@ -16,6 +16,42 @@ const SASL_PASS = process.env.KAFKA_SASL_PASSWORD || null;
 const CB_FAILURE_THRESHOLD = parseInt(process.env.KAFKA_CB_FAILURE_THRESHOLD || "5", 10);
 const CB_WINDOW_MS = parseInt(process.env.KAFKA_CB_WINDOW_MS || "60000", 10);
 const CB_COOLDOWN_MS = parseInt(process.env.KAFKA_CB_COOLDOWN_MS || "30000", 10);
+const SCHEMA_REGISTRY_ENABLED = process.env.SCHEMA_REGISTRY_ENABLED === "true";
+const SCHEMA_REGISTRY_REQUIRED = process.env.SCHEMA_REGISTRY_REQUIRED !== "false";
+const SCHEMA_REGISTRY_URL = (process.env.SCHEMA_REGISTRY_URL || "http://localhost:8081").replace(/\/$/, "");
+const KAFKA_SCHEMA_SUBJECT = process.env.KAFKA_SCHEMA_SUBJECT || `${TOPIC}-value`;
+const SCHEMA_REGISTRY_COMPATIBILITY = process.env.SCHEMA_REGISTRY_COMPATIBILITY || "BACKWARD";
+const SCHEMA_REGISTRY_TIMEOUT_MS = parseInt(process.env.SCHEMA_REGISTRY_TIMEOUT_MS || "5000", 10);
+
+const EVENT_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: true,
+  required: ["event_id", "event_type", "schema_version", "occurred_at", "source_service"],
+  properties: {
+    event_id: { type: "string", minLength: 1 },
+    event_type: {
+      type: "string",
+      enum: ["click", "rating", "skip", "dwell", "recommendation_served", "training_completed"],
+    },
+    schema_version: { type: "integer", minimum: 1 },
+    occurred_at: { type: "string", format: "date-time" },
+    source_service: { type: "string", minLength: 1 },
+    api_route: { type: ["string", "null"] },
+    project_id: { type: ["integer", "string", "null"] },
+    user_id: { type: ["integer", "string", "null"] },
+    app_name: { type: ["string", "null"] },
+    api_key_hash: { type: ["string", "null"] },
+    session_id: { type: ["string", "null"] },
+    correlation_id: { type: ["string", "null"] },
+    item_id: { type: ["string", "integer", "null"] },
+    item_title: { type: ["string", "null"] },
+    rating_value: { type: ["number", "null"] },
+    dwell_time_ms: { type: ["number", "integer", "null"] },
+    recommendation_count: { type: ["integer", "null"] },
+    recommendations_preview: { type: ["array", "null"] },
+    metadata: { type: "object" },
+  },
+};
 
 // ─── Build KafkaJS client ─────────────────────────────────────────────────────
 let kafka = null;
@@ -23,6 +59,86 @@ let producer = null;
 let producerReady = false;
 let warnedProducerNotReady = false;
 const circuitBreaker = { failures: [], openUntil: 0 };
+let schemaRegistryReady = !SCHEMA_REGISTRY_ENABLED;
+let schemaRegistryId = null;
+
+async function schemaRegistryRequest(path, { method = "GET", body } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SCHEMA_REGISTRY_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SCHEMA_REGISTRY_URL}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/vnd.schemaregistry.v1+json",
+        Accept: "application/vnd.schemaregistry.v1+json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    let parsed = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = { raw: text };
+      }
+    }
+    return { ok: res.ok, status: res.status, body: parsed };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function ensureSchemaRegistryReady() {
+  if (!SCHEMA_REGISTRY_ENABLED) return true;
+  if (schemaRegistryReady && schemaRegistryId) return true;
+
+  const payload = {
+    schemaType: "JSON",
+    schema: JSON.stringify(EVENT_JSON_SCHEMA),
+  };
+
+  try {
+    // Ensure subject-level compatibility policy.
+    await schemaRegistryRequest(`/config/${encodeURIComponent(KAFKA_SCHEMA_SUBJECT)}`, {
+      method: "PUT",
+      body: { compatibility: SCHEMA_REGISTRY_COMPATIBILITY },
+    });
+
+    const compatibility = await schemaRegistryRequest(
+      `/compatibility/subjects/${encodeURIComponent(KAFKA_SCHEMA_SUBJECT)}/versions/latest`,
+      { method: "POST", body: payload }
+    );
+    if (compatibility.status !== 404 && compatibility.ok && compatibility.body?.is_compatible === false) {
+      throw new Error(`Schema incompatible for subject ${KAFKA_SCHEMA_SUBJECT}`);
+    }
+
+    const register = await schemaRegistryRequest(`/subjects/${encodeURIComponent(KAFKA_SCHEMA_SUBJECT)}/versions`, {
+      method: "POST",
+      body: payload,
+    });
+    if (!register.ok || !register.body?.id) {
+      throw new Error(`Schema register failed: HTTP ${register.status}`);
+    }
+    schemaRegistryId = String(register.body.id);
+    schemaRegistryReady = true;
+    console.info(
+      `[kafka/producer] Schema Registry ready: subject=${KAFKA_SCHEMA_SUBJECT} id=${schemaRegistryId} compatibility=${SCHEMA_REGISTRY_COMPATIBILITY}`
+    );
+    return true;
+  } catch (err) {
+    schemaRegistryReady = false;
+    schemaRegistryId = null;
+    const message = `[kafka/producer] Schema Registry bootstrap failed: ${err.message}`;
+    if (SCHEMA_REGISTRY_REQUIRED) {
+      throw new Error(message);
+    }
+    console.warn(message);
+    return false;
+  }
+}
 
 function cleanupFailures(now = Date.now()) {
   circuitBreaker.failures = circuitBreaker.failures.filter((ts) => now - ts <= CB_WINDOW_MS);
@@ -86,6 +202,8 @@ async function connectProducer() {
   if (producerReady) return;
 
   try {
+    await ensureSchemaRegistryReady();
+
     kafka = buildKafkaClient();
     producer = kafka.producer({
       createPartitioner: Partitioners.DefaultPartitioner,
@@ -218,6 +336,14 @@ async function emitEvent(partial, { throwOnValidation = false } = {}) {
   }
 
   try {
+    if (SCHEMA_REGISTRY_ENABLED && (!schemaRegistryReady || !schemaRegistryId)) {
+      if (!warnedProducerNotReady) {
+        console.warn("[kafka/producer] Schema Registry not ready — event logging is currently skipped");
+        warnedProducerNotReady = true;
+      }
+      return null;
+    }
+
     await producer.send({
       topic: TOPIC,
       compression: CompressionTypes.GZIP,
@@ -228,6 +354,13 @@ async function emitEvent(partial, { throwOnValidation = false } = {}) {
           headers: {
             "event-type": event.event_type,
             "source-service": event.source_service,
+            ...(schemaRegistryId
+              ? {
+                  "schema-id": schemaRegistryId,
+                  "schema-subject": KAFKA_SCHEMA_SUBJECT,
+                  "schema-version": String(event.schema_version),
+                }
+              : {}),
           },
         },
       ],
