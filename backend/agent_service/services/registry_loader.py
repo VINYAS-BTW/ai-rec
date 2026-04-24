@@ -81,3 +81,6 @@ class AttributesRegistry:
         # Fallback
         return list(self._domain_to_attributes.keys())
 
+    def all_domains(self) -> List[str]:
+        return list(self._domain_to_attributes.keys())
+

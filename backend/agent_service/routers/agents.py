@@ -5,10 +5,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from services.recommender_client import RecommenderClient
-from services.registry_loader import AttributesRegistry
-from agents.orchestrator_agent import OrchestratorAgent
+from agents.contracts import AgentContext, AgentResponse, MediatorRequest
 from agents.domain_agent import DomainAgent
+from services.recommender_client import RecommenderClient
+from services.agent_registry import AgentRegistry
+from services.mediator import Mediator
+from services.registry_loader import AttributesRegistry
 
 
 router = APIRouter()
@@ -24,10 +26,10 @@ class DomainRecommendQuery(BaseModel):
 
 
 class DomainRecommendResponse(BaseModel):
-    domain_slug: str
-    project_id: int
-    recommendations: List[Dict[str, Any]]
-    used_context: Dict[str, Any]
+    agent: str
+    data: List[Dict[str, Any]]
+    confidence: float
+    meta: Dict[str, Any]
 
 
 class OrchestrateRequest(BaseModel):
@@ -44,13 +46,19 @@ class OrchestrateRequest(BaseModel):
 class OrchestrateResponse(BaseModel):
     correlation_id: Optional[str]
     results: List[DomainRecommendResponse]
+    merged: List[Dict[str, Any]]
+    meta: Dict[str, Any]
 
 
-def _get_services() -> tuple[RecommenderClient, AttributesRegistry, OrchestratorAgent]:
+def _get_services() -> tuple[RecommenderClient, AttributesRegistry, AgentRegistry, Mediator]:
     client = RecommenderClient()
     registry = AttributesRegistry()
-    orchestrator = OrchestratorAgent(client=client, attributes_registry=registry)
-    return client, registry, orchestrator
+    agent_registry = AgentRegistry()
+    domain_agent = DomainAgent(client=client, attributes_registry=registry)
+    for domain_slug in registry.all_domains():
+        agent_registry.register(domain_slug, domain_agent)
+    mediator = Mediator(registry=agent_registry, attributes_registry=registry)
+    return client, registry, agent_registry, mediator
 
 
 @router.get("/health")
@@ -66,9 +74,9 @@ async def recommend_domain(
     if query.domain_slug != domain_slug:
         raise HTTPException(status_code=400, detail="Path domain_slug must match body domain_slug.")
 
-    client, registry, _ = _get_services()
+    client, registry, _, _ = _get_services()
     domain_agent = DomainAgent(client=client, attributes_registry=registry)
-    result = await domain_agent.recommend(
+    agent_ctx = AgentContext(
         domain_slug=query.domain_slug,
         project_id=query.project_id,
         context=query.context,
@@ -76,26 +84,32 @@ async def recommend_domain(
         user_id=query.user_id,
         n=query.n,
     )
-    return DomainRecommendResponse(**result)
+    result = await domain_agent.handle(agent_ctx)
+    return DomainRecommendResponse(**result.__dict__)
 
 
 @router.post("/v1/orchestrate", response_model=OrchestrateResponse)
 async def orchestrate(req: OrchestrateRequest):
-    _, _, orchestrator = _get_services()
+    _, _, _, mediator = _get_services()
     if not req.project_id_map:
         raise HTTPException(
             status_code=400,
             detail="project_id_map is required (domain_slug -> backend/back2 project_id).",
         )
 
-    results = await orchestrator.run(
+    result = await mediator.handle(MediatorRequest(
         correlation_id=req.correlation_id,
         goal=req.goal,
         context=req.context,
         n=req.n,
         domains=req.domains,
         project_id_map=req.project_id_map,
-    )
+    ))
 
-    return OrchestrateResponse(correlation_id=req.correlation_id, results=results)
+    return OrchestrateResponse(
+        correlation_id=result.correlation_id,
+        results=[DomainRecommendResponse(**r.__dict__) for r in result.results],
+        merged=result.merged,
+        meta=result.meta,
+    )
 

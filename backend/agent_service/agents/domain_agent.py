@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from agents.contracts import AgentContext, AgentResponse, IAgent
 from services.recommender_client import RecommenderClient
 from services.registry_loader import AttributesRegistry
 
 
-class DomainAgent:
+class DomainAgent(IAgent):
     """
     Domain agent wrapper:
     - Validates context keys against the domain's known attributes (optional)
@@ -16,6 +17,28 @@ class DomainAgent:
     def __init__(self, *, client: RecommenderClient, attributes_registry: AttributesRegistry):
         self.client = client
         self.attributes_registry = attributes_registry
+
+    def can_handle(self, context: AgentContext) -> bool:
+        return bool(context.domain_slug and context.project_id > 0)
+
+    async def handle(self, context: AgentContext) -> AgentResponse:
+        result = await self.recommend(
+            domain_slug=context.domain_slug,
+            project_id=context.project_id,
+            context=context.context,
+            item_title=context.item_title,
+            user_id=context.user_id,
+            n=context.n,
+        )
+        return AgentResponse(
+            agent=result["domain_slug"],
+            data=result.get("recommendations") or [],
+            confidence=0.87,
+            meta={
+                "project_id": result["project_id"],
+                "used_context": result.get("used_context") or {},
+            },
+        )
 
     async def recommend(
         self,
