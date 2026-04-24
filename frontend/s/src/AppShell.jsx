@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "./context/AuthContext";
 import { toast } from "react-toastify";
-import { API_BACKEND, API_WEBHOOK, getBackendAuthHeaders } from "./api";
+import { API_AUTH, API_BACKEND, API_WEBHOOK, getBackendAuthHeaders } from "./api";
 
 const NAV_ITEMS = [
   {
@@ -188,6 +188,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
     mlBackend: { status: "checking", latency: null },
     webhook: { status: "checking", latency: null },
     auth: { status: "checking", latency: null },
+    kafka: { status: "checking", latency: null },
   });
 
   useEffect(() => {
@@ -196,6 +197,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
         mlBackend: { status: "degraded", latency: null },
         webhook: { status: "degraded", latency: null },
         auth: { status: "degraded", latency: null },
+        kafka: { status: "degraded", latency: null },
       };
 
       try {
@@ -207,12 +209,39 @@ const HomeOverview = ({ onNavigate, summary }) => {
           signal: AbortSignal.timeout(5000),
         });
         const latencyML = Date.now() - startML;
+        const reachable = mlRes.ok || mlRes.status === 401 || mlRes.status === 403;
         results.mlBackend = {
-          status: mlRes.ok ? "ok" : "degraded",
+          status: reachable ? "ok" : "degraded",
           latency: `${latencyML}ms`,
         };
       } catch (error) {
         results.mlBackend = { status: "degraded", latency: "offline" };
+      }
+
+      try {
+        const startKafka = Date.now();
+        const backendHeaders = getBackendAuthHeaders();
+        const kafkaRes = await fetch(`${API_BACKEND}/kafka/status`, {
+          method: "GET",
+          headers: backendHeaders,
+          signal: AbortSignal.timeout(5000),
+        });
+        const latencyKafka = Date.now() - startKafka;
+        if (kafkaRes.ok) {
+          const payload = await kafkaRes.json();
+          const ok = payload?.enabled && !payload?.circuit_breaker_open && !payload?.last_error;
+          results.kafka = {
+            status: ok ? "ok" : "degraded",
+            latency: `${latencyKafka}ms`,
+          };
+        } else {
+          results.kafka = {
+            status: "degraded",
+            latency: `${latencyKafka}ms`,
+          };
+        }
+      } catch (error) {
+        results.kafka = { status: "degraded", latency: "offline" };
       }
 
       try {
@@ -232,10 +261,8 @@ const HomeOverview = ({ onNavigate, summary }) => {
 
       try {
         const startAuth = Date.now();
-        const backendHeaders = getBackendAuthHeaders();
-        const authRes = await fetch(`${API_BACKEND}/projects/`, {
+        const authRes = await fetch(`${API_AUTH}/`, {
           method: "GET",
-          headers: backendHeaders,
           signal: AbortSignal.timeout(5000),
         });
         const latencyAuth = Date.now() - startAuth;
@@ -315,13 +342,19 @@ const HomeOverview = ({ onNavigate, summary }) => {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.5, duration: 0.6 }}
-        className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 font-third"
+        className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-6 font-third"
       >
         <StatusCard
           name="ML Backend"
           status={serviceHealth.mlBackend.status}
           endpoint={API_BACKEND}
           latency={serviceHealth.mlBackend.latency}
+        />
+        <StatusCard
+          name="Kafka (back2)"
+          status={serviceHealth.kafka.status}
+          endpoint={`${API_BACKEND}/kafka/status`}
+          latency={serviceHealth.kafka.latency}
         />
         <StatusCard
           name="Webhook Service"

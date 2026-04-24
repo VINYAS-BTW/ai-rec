@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import { apps, usage } from "../db/schema.js";
 import { eq, sql } from "drizzle-orm";
 import axios from "axios";
+import { emitEvent } from "../kafka/producer.js";
 
 const router = express.Router();
 
@@ -50,6 +51,25 @@ router.post("/", async (req, res) => {
         target: usage.app_name,
         set: { usage_count: sql`${usage.usage_count} + 1` },
       });
+
+    emitEvent({
+      event_type: "recommendation_served",
+      source_service: "webhooks-service",
+      api_route: req.originalUrl,
+      project_id: req.project?.id || req.body.project_id || null,
+      user_id: req.body.user_id || null,
+      app_name: app.app_name,
+      _raw_api_key: req.rawApiKey || apiKey || null,
+      session_id: req.body.session_id || req.headers["x-session-id"] || null,
+      correlation_id: req.body.correlation_id || req.headers["x-correlation-id"] || null,
+      recommendation_count: (recData.recommendations || recData.data?.recommendations || []).length,
+      recommendations_preview: (recData.recommendations || recData.data?.recommendations || []).slice(0, 5).map((r) => ({
+        item_id: r.id || r.item_id || null,
+        title: r.title || null,
+        score: r.score ?? null,
+      })),
+      metadata: { request_body_keys: Object.keys(req.body) },
+    }).catch(() => { /* already logged inside emitEvent */ });
 
     res.json({
       success: true,

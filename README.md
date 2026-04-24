@@ -4,6 +4,11 @@ A full-stack **recommendation platform (backend-as-a-service)** with ML models (
 
 **System design:** See **[ARCHITECTURE.md](ARCHITECTURE.md)** for flows, services, database schemas, and data flow.
 
+## 📚 Quick Start
+
+- **👥 Team setup?** → [TEAM_SETUP.md](TEAM_SETUP.md)
+- **📊 Kafka?** → [KAFKA_SETUP.md](KAFKA_SETUP.md)
+
 ---
 
 ## Prerequisites
@@ -11,6 +16,7 @@ A full-stack **recommendation platform (backend-as-a-service)** with ML models (
 - **Node.js** (v18+)
 - **Python** (3.9+)
 - **PostgreSQL** (local or [Neon](https://neon.tech))
+- **Docker** (for Apache Kafka message broker; [download](https://www.docker.com/products/docker-desktop))
 
 ---
 
@@ -62,9 +68,31 @@ Use the same DB (or one with a `recommender` schema). Tables are created on star
 PORT=3001
 DATABASE_URL=postgresql://user:pass@host:5432/dbname
 BACK2_INTERNAL_KEY=your-internal-key-for-webhook-service
+KAFKA_BROKERS=localhost:9092
+EVENT_LOGGING_ENABLED=true
 ```
 
 **`BACK2_INTERNAL_KEY`** must match the value in `backend/back2/.env` so the webhook service can call the ML backend for recommendations. Optional: `FASTAPI_URL=http://localhost:8000` if the ML backend is on another host.
+
+### 4. Kafka event broker (`backend/back2/.env` and `backend/webhooks_services/.env`)
+
+Both services need Kafka configuration:
+
+```env
+KAFKA_BROKERS=localhost:9092
+EVENT_LOGGING_ENABLED=true
+```
+
+- **`KAFKA_BROKERS`:** Comma-separated list of Kafka broker addresses. Default: `localhost:9092` (local Docker).
+- **`EVENT_LOGGING_ENABLED`:** Set to `true` to emit training completion events to Kafka. Default: `true`.
+
+### 5. Frontend (optional)
+
+Create `frontend/s/.env` if auth runs on a different URL:
+
+```env
+VITE_AUTH_API_URL=http://localhost:8080
+```
 
 ### 4. Frontend (optional)
 
@@ -133,7 +161,90 @@ Create the schemas manually or run the same script with your local `DATABASE_URL
 
 ---
 
-## Run the app (5 terminals + optional)
+## Kafka setup (Docker)
+
+### Start Kafka broker locally
+
+**Windows, Mac, or Linux with Docker:**
+
+```bash
+docker run -d \
+  --name kafka-broker \
+  -p 9092:9092 \
+  -e KAFKA_NODE_ID=1 \
+  -e KAFKA_BROKER_ID=1 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:29093 \
+  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092 \
+  -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://127.0.0.1:9092 \
+  apache/kafka:4.2.0
+```
+
+Or use **Docker Compose** (create `docker-compose.yml` in project root):
+
+```yaml
+version: '3.9'
+services:
+  kafka:
+    image: apache/kafka:4.2.0
+    container_name: kafka-broker
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_BROKER_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://127.0.0.1:9092
+```
+
+Then start with:
+
+```bash
+docker-compose up -d kafka
+```
+
+Verify Kafka is running:
+
+```bash
+docker ps | grep kafka
+```
+
+You should see the `kafka-broker` container running on port `9092`.
+
+---
+
+## Run the app (7 terminals + optional)
+
+### Terminal 0 – Kafka (Docker)
+
+```bash
+docker run -d --name kafka-broker -p 9092:9092 \
+  -e KAFKA_NODE_ID=1 -e KAFKA_BROKER_ID=1 \
+  -e KAFKA_PROCESS_ROLES=broker,controller \
+  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
+  -e KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:29093 \
+  -e KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092 \
+  -e KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT \
+  -e KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-broker:29092,PLAINTEXT_HOST://127.0.0.1:9092 \
+  apache/kafka:4.2.0
+```
+
+→ **Kafka broker on localhost:9092** (topics auto-created on first event emission).
+
+**Stop Kafka (when done):**
+
+```bash
+docker stop kafka-broker && docker rm kafka-broker
+```
 
 ### Terminal 1 – Auth
 
@@ -166,7 +277,26 @@ npm start
 
 → **http://localhost:3001**
 
-### Terminal 4 – Frontend
+### Terminal 3b – Kafka event consumer (Node.js, same folder as Terminal 3)
+
+In another terminal, from the same folder:
+
+```bash
+cd backend/webhooks_services
+npm run start:consumer
+```
+
+This subscribes to `rec.events.v1` and persists events to PostgreSQL. Output should show:
+```
+[consumer] Consumer has joined the group
+```
+
+When training completes, you'll see:
+```
+[consumer] Event received: {...}
+```
+
+### Terminal 4 – Frontend (or 5 if using consumer)
 
 ```bash
 cd frontend/s
@@ -176,7 +306,7 @@ npm run dev
 
 → **http://localhost:5173**
 
-### Terminal 5 – Agent service (optional but recommended for full agent architecture)
+### Terminal 5 (or 6) – Agent service (optional but recommended for full agent architecture)
 
 ```bash
 cd backend/agent_service
@@ -186,7 +316,7 @@ uvicorn main:app --reload --port 8002
 
 → **http://localhost:8002**
 
-### Terminal 6 (optional) – MLflow UI
+### Terminal 6 (or 7) – MLflow UI (optional)
 
 ```bash
 cd backend/back2
@@ -237,21 +367,27 @@ To run with a static server: `npx serve xternal_client/MovieRec`.
 
 ## Port summary
 
-| Service        | Port | Purpose                    |
-|----------------|------|----------------------------|
-| Auth           | 8080 | Login, signup, JWT         |
-| ML recommender | 8000 | Projects, train, recommend |
-| Agent service  | 8002 | Optional agent layer API   |
-| Webhooks       | 3001 | Apps, API key, recommend   |
-| Frontend       | 5173 | React UI                   |
-| MLflow UI      | 5000 | Optional model registry    |
+| Service        | Port | Purpose                                      |
+|----------------|------|----------------------------------------------|
+| Kafka broker   | 9092 | Event streaming (Docker)                    |
+| Auth           | 8080 | Login, signup, JWT                          |
+| ML recommender | 8000 | Projects, train, recommend, emit events     |
+| Agent service  | 8002 | Optional agent layer API                    |
+| Webhooks       | 3001 | Apps, API key, recommend, consume events    |
+| Frontend       | 5173 | React UI                                    |
+| MLflow UI      | 5000 | Optional model registry                     |
 
 ---
 
 ## Troubleshooting
 
-- **CORS / connection errors:** Ensure Auth (8080), back2 (8000), and webhooks (3001) are running before using the frontend.
-- **"Project not found" (404):** The `project_id` (e.g. in MovieRec’s `PROJECT` or in the recommend API) must exist in the ML backend. Create a project in the Dashboard, wait until status is **Ready**, then use that ID (or list IDs with `GET http://localhost:8000/projects/`).
+- **CORS / connection errors:** Ensure Auth (8080), back2 (8000), and webhooks (3001) are running before using the frontend.- **"Kafka connection failed":** Ensure Kafka Docker container is running on port 9092. Check: `docker ps | grep kafka`. If not running, start it (see [Kafka setup](#kafka-setup-docker)).
+- **Events not persisted to database:** 
+  1. Verify Kafka is running: `docker ps`
+  2. Check backend logs for: `Emitted Kafka event for training completion (event_id=...)`
+  3. Check consumer logs for: `[consumer] Consumer has joined the group` and event processing (no DLQ errors)
+  4. Query database: `SELECT COUNT(*) FROM webhooks.event_logs WHERE event_type='training_completed'`
+- **Consumer won't start:** Ensure `.env` in `backend/webhooks_services/` has `KAFKA_BROKERS=localhost:9092` and `EVENT_LOGGING_ENABLED=true`.- **"Project not found" (404):** The `project_id` (e.g. in MovieRec’s `PROJECT` or in the recommend API) must exist in the ML backend. Create a project in the Dashboard, wait until status is **Ready**, then use that ID (or list IDs with `GET http://localhost:8000/projects/`).
 - **"Project not found or not ready":** Wait until the project status is **Ready** after uploading data and training.
 - **Database errors:** Run the schema script (see [One-time database setup](#one-time-database-setup-neon-or-single-postgresql)) and check `DATABASE_URL` (and `MLFLOW_TRACKING_URI` for back2) in each `.env`.
 - **Content model error ("not in index" / empty column):** Ensure the content file has **item_id**, **item_title**, and at least one **feature** column mapped to real CSV columns (no empty mappings).

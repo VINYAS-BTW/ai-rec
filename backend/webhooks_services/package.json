@@ -7,6 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
+    "start:consumer": "node workers/eventConsumer.js",
     "db:generate": "drizzle-kit generate --config=drizzle.config.cjs",
     "db:migrate": "drizzle-kit migrate --config=drizzle.config.cjs",
     "db:studio": "drizzle-kit studio --config=drizzle.config.cjs"
@@ -21,8 +22,10 @@
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "express": "^5.1.0",
+    "kafkajs": "^2.2.4",
     "node-fetch": "^3.3.2",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.8"

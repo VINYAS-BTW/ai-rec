@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
+from kafka.producer import emit_event, emit_event_bg, shutdown_producer, get_kafka_status
 
 from pydantic import BaseModel
 
@@ -74,7 +75,7 @@ async def notify_webhooks(event_type: str, payload: dict):
         async with httpx.AsyncClient() as client:
             res = await client.get(f"{base}/api/apps")
             if res.status_code != 200:
-                print("⚠️ Could not fetch registered apps from webhook service")
+                print("WARN: Could not fetch registered apps from webhook service")
                 return
             apps = res.json()
 
@@ -89,11 +90,11 @@ async def notify_webhooks(event_type: str, payload: dict):
                         },
                         timeout=10.0,
                     )
-                    print(f"✅ Notified {app['app_name']} at {app['webhook_url']}")
+                    print(f"INFO: Notified {app['app_name']} at {app['webhook_url']}")
                 except Exception as e:
-                    print(f"❌ Failed to send to {app['app_name']}: {e}")
+                    print(f"ERROR: Failed to send to {app['app_name']}: {e}")
     except Exception as e:
-        print(f"❌ notify_webhooks failed: {e}")
+        print(f"ERROR: notify_webhooks failed: {e}")
 # --- App Setup & Model Storage ---
 # Override with USER_UPLOADS_DIR in .env when deploying (e.g. Docker volume path).
 USER_UPLOADS_DIR = os.path.normpath(os.getenv("USER_UPLOADS_DIR") or os.path.join(_BACK2_DIR, "user_uploads"))
@@ -338,8 +339,11 @@ async def lifespan(app: FastAPI):
         print("  Check DATABASE_URL in .env and network (PostgreSQL/Neon required).")
         if "could not translate host name" in str(e) or "Name or service not known" in str(e):
             print("  → DNS cannot resolve the Neon host. Try: Neon dashboard → Connection string → use 'Direct' (non-pooler) URL, or check network/VPN/DNS (e.g. 8.8.8.8).")
-    yield
-    print("Server shutting down.")
+    try:
+        yield
+    finally:
+        await shutdown_producer()
+        print("Server shutting down.")
 
 app = FastAPI(lifespan=lifespan)
 _cors_origins = [
@@ -361,6 +365,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/")
+def root():
+    return {
+        "ok": True,
+        "service": "ml-backend",
+        "docs": "/docs",
+        "kafka_status": "/kafka/status",
+    }
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "service": "ml-backend"}
 
 @app.exception_handler(OperationalError)
 def handle_db_unavailable(request: Request, exc: OperationalError):
@@ -430,6 +449,7 @@ class SuperAgentChatResponse(BaseModel):
 @app.post("/superagent/v1/chat", response_model=SuperAgentChatResponse)
 async def superagent_chat(
     req: SuperAgentChatRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
@@ -506,13 +526,46 @@ async def superagent_chat(
         db=db,
     )
 
+    results_payload = pred.get("results") if isinstance(pred, dict) else None
+
+    if results_payload:
+        first_block = results_payload[0] if isinstance(results_payload[0], dict) else {}
+        first_recs = first_block.get("recommendations") or []
+        preview = []
+        for r in first_recs[:5]:
+            if isinstance(r, dict):
+                preview.append({"item_id": r.get("id"), "title": r.get("title"), "score": r.get("score")})
+            else:
+                preview.append({"item_id": None, "title": str(r), "score": None})
+
+        recommendation_count = sum(
+            len((block or {}).get("recommendations") or [])
+            for block in results_payload
+            if isinstance(block, dict)
+        )
+
+        background_tasks.add_task(emit_event_bg, {
+            "event_type": "recommendation_served",
+            "source_service": "fastapi-recommender",
+            "api_route": "/superagent/v1/chat",
+            "project_id": first_block.get("project_id"),
+            "user_id": None,
+            "_raw_api_key": None,
+            "recommendation_count": recommendation_count,
+            "recommendations_preview": preview,
+            "metadata": {
+                "session_id": session_id,
+                "target_domain": str(target_domain),
+            },
+        })
+
     return SuperAgentChatResponse(
         session_id=session_id,
         status="ok",
         target_domain=str(target_domain),
         used_context=merged_context,
         question=None,
-        results=pred.get("results") if isinstance(pred, dict) else None,
+        results=results_payload,
     )
 
 def get_next_project_id(db: Session) -> int:
@@ -896,6 +949,27 @@ async def process_project(project_id: int, db: Session):
         db.commit()
         print(f"[Task {project_id}]: Processing complete.")
 
+        # --- Send Kafka event for training completion ---
+        try:
+            event_id = await emit_event({
+                "event_type": "training_completed",
+                "source_service": "fastapi-recommender",
+                "api_route": "/agent/v1/train-preset",
+                "project_id": db_project.id,
+                "user_id": db_project.owner_id if db_project.owner_id != -1 else None,
+                "metadata": {
+                    "project_name": db_project.project_name,
+                    "model_type": str(db_project.model_type),
+                    "mlflow_model_name": db_project.mlflow_model_name,
+                },
+            })
+            if event_id:
+                print(f"[Task {project_id}]: Emitted Kafka event for training completion (event_id={event_id}).")
+            else:
+                print(f"[Task {project_id}]: Kafka event was not emitted (producer unavailable or validation failed).")
+        except Exception as event_err:
+            print(f"[Task {project_id}]: Failed to emit Kafka event - {event_err}")
+
         # --- Send webhook notification ---
         try:
             await notify_webhooks("model_ready", {
@@ -1014,6 +1088,11 @@ def get_projects(
         )
     ).all()
     return projects
+
+
+@app.get("/kafka/status")
+def kafka_status():
+    return get_kafka_status()
 
 @app.get("/project/{project_id}/status", response_model=schemas.RecommenderProject)
 def get_project_status(
@@ -1273,6 +1352,7 @@ def get_project_context_options(
 def get_recommendations(
     request: Request,
     project_id: int,
+    background_tasks: BackgroundTasks,
     user_id: Optional[str] = None,
     item_title: Optional[str] = None,
     n: int = 10,
@@ -1328,6 +1408,25 @@ def get_recommendations(
             recs = []
         if recs is None:
             recs = []
+
+        preview = []
+        for r in recs[:5]:
+            if isinstance(r, dict):
+                preview.append({"item_id": r.get("id"), "title": r.get("title"), "score": r.get("score")})
+            else:
+                preview.append({"item_id": None, "title": str(r), "score": None})
+
+        background_tasks.add_task(emit_event_bg, {
+            "event_type": "recommendation_served",
+            "source_service": "fastapi-recommender",
+            "api_route": f"/project/{project_id}/recommendations",
+            "project_id": project_id,
+            "user_id": user_id,
+            "_raw_api_key": None,
+            "recommendation_count": len(recs),
+            "recommendations_preview": preview,
+            "metadata": {},
+        })
 
         return schemas.RecommendationResponse(
             input_item_title=item_title if model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID) else None,
@@ -1616,6 +1715,7 @@ async def _predict_project(
 async def agent_domain_recommend(
     domain_slug: str,
     req: AgentDomainRecommendRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
@@ -1628,6 +1728,29 @@ async def agent_domain_recommend(
         user_id=req.user_id,
         n=req.n,
     )
+
+    recs = pred.get("recommendations") if isinstance(pred, dict) else []
+    if not isinstance(recs, list):
+        recs = []
+
+    preview = []
+    for r in recs[:5]:
+        if isinstance(r, dict):
+            preview.append({"item_id": r.get("id"), "title": r.get("title"), "score": r.get("score")})
+        else:
+            preview.append({"item_id": None, "title": str(r), "score": None})
+
+    background_tasks.add_task(emit_event_bg, {
+        "event_type": "recommendation_served",
+        "source_service": "fastapi-recommender",
+        "api_route": f"/agent/v1/domain/{domain_slug}/recommend",
+        "project_id": req.project_id,
+        "user_id": req.user_id,
+        "_raw_api_key": None,
+        "recommendation_count": len(recs),
+        "recommendations_preview": preview,
+        "metadata": {"domain_slug": domain_slug},
+    })
 
     return {
         "domain_slug": domain_slug,
@@ -1713,6 +1836,7 @@ async def agent_orchestrate(
 @app.post("/agent/v1/recommend")
 async def agent_single_recommend(
     req: AgentSingleRecommendRequest,
+    background_tasks: BackgroundTasks,
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
@@ -1772,6 +1896,35 @@ async def agent_single_recommend(
                 **pred,
             }
         )
+
+    total_recs = sum(
+        len((block or {}).get("recommendations") or [])
+        for block in results
+        if isinstance(block, dict)
+    )
+    first_block = results[0] if results and isinstance(results[0], dict) else {}
+    first_recs = first_block.get("recommendations") or []
+    preview = []
+    for r in first_recs[:5]:
+        if isinstance(r, dict):
+            preview.append({"item_id": r.get("id"), "title": r.get("title"), "score": r.get("score")})
+        else:
+            preview.append({"item_id": None, "title": str(r), "score": None})
+
+    background_tasks.add_task(emit_event_bg, {
+        "event_type": "recommendation_served",
+        "source_service": "fastapi-recommender",
+        "api_route": "/agent/v1/recommend",
+        "project_id": first_block.get("project_id"),
+        "user_id": req.user_id,
+        "_raw_api_key": None,
+        "recommendation_count": total_recs,
+        "recommendations_preview": preview,
+        "metadata": {
+            "target_domain": req.target_domain,
+            "correlation_id": req.correlation_id,
+        },
+    })
 
     return {"correlation_id": req.correlation_id, "results": results}
 
