@@ -12,12 +12,14 @@ import pickle
 import shutil
 import numpy as np
 import tempfile
+import random
+import time
 from scipy.sparse import issparse, save_npz
 import jwt
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import or_
+from sqlalchemy import or_, desc
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
@@ -62,7 +64,7 @@ from Collaborative import CollaborativeFilteringRecommender
 from ParameterDriven import ParameterDrivenRecommender
 # --- Import the MLflow wrapper ---
 from dynamic_recommender import MLflowRecommenderWrapper
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 
@@ -613,6 +615,135 @@ def get_project_for_user(project_id: int, user_id: int, db: Session):
         raise HTTPException(status_code=404, detail="Project not found.")
     return db_project
 
+
+def _ensure_serving_control(db: Session, project_id: int) -> models.ServingControl:
+    ctrl = db.query(models.ServingControl).filter(models.ServingControl.project_id == project_id).first()
+    if ctrl:
+        return ctrl
+    ctrl = models.ServingControl(project_id=project_id)
+    db.add(ctrl)
+    db.commit()
+    db.refresh(ctrl)
+    return ctrl
+
+
+def _get_champion_entry(db: Session, project_id: int) -> Optional[models.ModelRegistryEntry]:
+    return (
+        db.query(models.ModelRegistryEntry)
+        .filter(
+            models.ModelRegistryEntry.project_id == project_id,
+            models.ModelRegistryEntry.role == models.ModelRegistryRole.CHAMPION.value,
+            models.ModelRegistryEntry.retired_at.is_(None),
+        )
+        .order_by(desc(models.ModelRegistryEntry.version))
+        .first()
+    )
+
+
+def _get_latest_challenger_entry(db: Session, project_id: int) -> Optional[models.ModelRegistryEntry]:
+    return (
+        db.query(models.ModelRegistryEntry)
+        .filter(
+            models.ModelRegistryEntry.project_id == project_id,
+            models.ModelRegistryEntry.role == models.ModelRegistryRole.CHALLENGER.value,
+            models.ModelRegistryEntry.retired_at.is_(None),
+        )
+        .order_by(desc(models.ModelRegistryEntry.version))
+        .first()
+    )
+
+
+def _register_model_version(
+    *,
+    db: Session,
+    db_project: models.RecommenderProject,
+    model_path: str,
+    metrics: Optional[Dict[str, Any]] = None,
+) -> models.ModelRegistryEntry:
+    last_version = (
+        db.query(models.ModelRegistryEntry)
+        .filter(models.ModelRegistryEntry.project_id == db_project.id)
+        .order_by(desc(models.ModelRegistryEntry.version))
+        .first()
+    )
+    next_version = int(last_version.version) + 1 if last_version else 1
+    existing_champion = _get_champion_entry(db, db_project.id)
+    role = models.ModelRegistryRole.CHAMPION.value if existing_champion is None else models.ModelRegistryRole.CHALLENGER.value
+    now_utc = datetime.now(timezone.utc)
+
+    row = models.ModelRegistryEntry(
+        project_id=db_project.id,
+        owner_id=db_project.owner_id,
+        model_type=str(db_project.model_type) if db_project.model_type is not None else None,
+        version=next_version,
+        role=role,
+        model_path=model_path,
+        metrics_json=json.dumps(metrics or {}),
+        promoted_at=now_utc if role == models.ModelRegistryRole.CHAMPION.value else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _sync_live_model_path_from_entry(project_id: int, entry: models.ModelRegistryEntry) -> None:
+    live_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
+    if not entry or not entry.model_path:
+        return
+    if not os.path.isdir(entry.model_path):
+        return
+    if os.path.isdir(live_path):
+        shutil.rmtree(live_path)
+    shutil.copytree(entry.model_path, live_path)
+
+
+def _run_prediction_for_model(
+    *,
+    model_path: str,
+    model_type: Any,
+    context: Dict[str, Any],
+    item_title: Optional[str],
+    user_id: Optional[str],
+    n: int,
+) -> Dict[str, Any]:
+    if not os.path.isdir(model_path):
+        raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
+
+    reserved = {"user_id", "item_title", "n"}
+    feature_context = {k: v for k, v in (context or {}).items() if k not in reserved and v is not None and str(v).strip()}
+    model_uri = _path_to_file_uri(model_path)
+
+    started = time.perf_counter()
+    model = mlflow.pyfunc.load_model(model_uri)
+
+    if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        row: Dict[str, Any] = {**feature_context, "n": n}
+        if item_title:
+            row["item_title"] = item_title
+        model_input = pd.DataFrame([row])
+    else:
+        if model_type == models.ModelType.CONTENT and not item_title:
+            raise HTTPException(status_code=400, detail="item_title is required for this content-based model.")
+        if model_type == models.ModelType.COLLABORATIVE and not user_id:
+            raise HTTPException(status_code=400, detail="user_id is required for this collaborative model.")
+        model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
+
+    result_json = model.predict(model_input)[0]
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    result = json.loads(result_json)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    recs = result.get("recommendations")
+    if recs is None or not isinstance(recs, list):
+        recs = []
+
+    return {
+        "recommendations": recs,
+        "latency_ms": round(float(latency_ms), 3),
+    }
+
 # --- Helper function (Unchanged) ---
 async def save_file_and_schema(
     db: Session,
@@ -1007,6 +1138,21 @@ async def process_project(project_id: int, db: Session):
             )
             print(f"[Task {project_id}]: Model saved to {saved_model_path}")
 
+            # Snapshot trained model as an immutable registry version.
+            registry_project_dir = os.path.join(PROJECT_MODELS_DIR, "registry", f"project_{project_id}")
+            os.makedirs(registry_project_dir, exist_ok=True)
+            last_reg = (
+                db.query(models.ModelRegistryEntry)
+                .filter(models.ModelRegistryEntry.project_id == project_id)
+                .order_by(desc(models.ModelRegistryEntry.version))
+                .first()
+            )
+            snapshot_version = int(last_reg.version) + 1 if last_reg else 1
+            snapshot_path = os.path.join(registry_project_dir, f"v{snapshot_version}")
+            if os.path.isdir(snapshot_path):
+                shutil.rmtree(snapshot_path)
+            shutil.copytree(saved_model_path, snapshot_path)
+
             # --- Build Vector Store indexes ---
             try:
                 evict_vector_store(project_id)
@@ -1036,9 +1182,30 @@ async def process_project(project_id: int, db: Session):
 
         # --- Update Project in DB ---
         db_project.mlflow_model_name = model_name
-        db_project.mlflow_model_version = 1  # Local model version (not from registry)
+        db_project.mlflow_model_version = snapshot_version
         db_project.status = models.ProjectStatus.READY
         db.commit()
+
+        reg_entry = _register_model_version(
+            db=db,
+            db_project=db_project,
+            model_path=snapshot_path,
+            metrics={
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+                "project_status": str(db_project.status),
+                "model_type": str(db_project.model_type),
+            },
+        )
+
+        if str(reg_entry.role) == models.ModelRegistryRole.CHALLENGER.value:
+            champion = _get_champion_entry(db, project_id)
+            if champion and os.path.isdir(champion.model_path):
+                _sync_live_model_path_from_entry(project_id, champion)
+                print(f"[Task {project_id}]: New challenger v{reg_entry.version} stored; champion v{champion.version} kept live.")
+        else:
+            print(f"[Task {project_id}]: Model version v{reg_entry.version} set as champion.")
+
+        _ensure_serving_control(db, project_id)
         print(f"[Task {project_id}]: Processing complete.")
 
         # --- Send Kafka event for training completion ---
@@ -1186,6 +1353,183 @@ def get_projects(
 def kafka_status():
     return get_kafka_status()
 
+
+class ServingControlsUpdateRequest(BaseModel):
+    shadow_enabled: Optional[bool] = None
+    shadow_percentage: Optional[int] = None
+    latency_warn_ms: Optional[int] = None
+
+
+@app.get("/project/{project_id}/model-registry")
+def get_project_model_registry(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    rows = (
+        db.query(models.ModelRegistryEntry)
+        .filter(models.ModelRegistryEntry.project_id == project_id)
+        .order_by(desc(models.ModelRegistryEntry.version))
+        .all()
+    )
+    return {
+        "project_id": project_id,
+        "entries": [
+            {
+                "id": int(r.id),
+                "version": int(r.version),
+                "role": str(r.role),
+                "model_type": r.model_type,
+                "model_path": r.model_path,
+                "metrics": json.loads(r.metrics_json or "{}"),
+                "created_at": r.created_at,
+                "promoted_at": r.promoted_at,
+                "retired_at": r.retired_at,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/project/{project_id}/model-registry/{entry_id}/promote")
+def promote_model_version(
+    project_id: int,
+    entry_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    target = (
+        db.query(models.ModelRegistryEntry)
+        .filter(models.ModelRegistryEntry.id == entry_id, models.ModelRegistryEntry.project_id == project_id)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Model version not found for project.")
+    if target.retired_at is not None:
+        raise HTTPException(status_code=400, detail="Cannot promote a retired version.")
+    if not os.path.isdir(target.model_path):
+        raise HTTPException(status_code=400, detail="Model path for this version is missing on disk.")
+
+    current_champion = _get_champion_entry(db, project_id)
+    now_utc = datetime.now(timezone.utc)
+    if current_champion and current_champion.id != target.id:
+        current_champion.role = models.ModelRegistryRole.RETIRED.value
+        current_champion.retired_at = now_utc
+
+    target.role = models.ModelRegistryRole.CHAMPION.value
+    target.promoted_at = now_utc
+    target.retired_at = None
+
+    # Keep non-promoted active versions as challengers.
+    active_others = (
+        db.query(models.ModelRegistryEntry)
+        .filter(
+            models.ModelRegistryEntry.project_id == project_id,
+            models.ModelRegistryEntry.id != target.id,
+            models.ModelRegistryEntry.retired_at.is_(None),
+            models.ModelRegistryEntry.role != models.ModelRegistryRole.RETIRED.value,
+        )
+        .all()
+    )
+    for row in active_others:
+        row.role = models.ModelRegistryRole.CHALLENGER.value
+
+    db.commit()
+    _sync_live_model_path_from_entry(project_id, target)
+    return {"project_id": project_id, "champion_version": int(target.version), "status": "promoted"}
+
+
+@app.post("/project/{project_id}/model-registry/{entry_id}/retire")
+def retire_model_version(
+    project_id: int,
+    entry_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    target = (
+        db.query(models.ModelRegistryEntry)
+        .filter(models.ModelRegistryEntry.id == entry_id, models.ModelRegistryEntry.project_id == project_id)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Model version not found for project.")
+    if str(target.role) == models.ModelRegistryRole.CHAMPION.value:
+        raise HTTPException(status_code=400, detail="Cannot retire champion directly. Promote another version first.")
+    target.role = models.ModelRegistryRole.RETIRED.value
+    target.retired_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"project_id": project_id, "version": int(target.version), "status": "retired"}
+
+
+@app.get("/project/{project_id}/serving-controls")
+def get_serving_controls(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    ctrl = _ensure_serving_control(db, project_id)
+    return {
+        "project_id": project_id,
+        "shadow_enabled": bool(ctrl.shadow_enabled),
+        "shadow_percentage": int(ctrl.shadow_percentage or 0),
+        "latency_warn_ms": int(ctrl.latency_warn_ms or 0),
+    }
+
+
+@app.put("/project/{project_id}/serving-controls")
+def update_serving_controls(
+    project_id: int,
+    body: ServingControlsUpdateRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    ctrl = _ensure_serving_control(db, project_id)
+    if body.shadow_enabled is not None:
+        ctrl.shadow_enabled = bool(body.shadow_enabled)
+    if body.shadow_percentage is not None:
+        if body.shadow_percentage < 0 or body.shadow_percentage > 100:
+            raise HTTPException(status_code=400, detail="shadow_percentage must be between 0 and 100")
+        ctrl.shadow_percentage = int(body.shadow_percentage)
+    if body.latency_warn_ms is not None:
+        if body.latency_warn_ms < 1:
+            raise HTTPException(status_code=400, detail="latency_warn_ms must be >= 1")
+        ctrl.latency_warn_ms = int(body.latency_warn_ms)
+    db.commit()
+    db.refresh(ctrl)
+    return {
+        "project_id": project_id,
+        "shadow_enabled": bool(ctrl.shadow_enabled),
+        "shadow_percentage": int(ctrl.shadow_percentage or 0),
+        "latency_warn_ms": int(ctrl.latency_warn_ms or 0),
+    }
+
+
+@app.get("/project/{project_id}/serving-metrics")
+def get_serving_metrics(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    get_project_for_user(project_id, current_user_id, db)
+    ctrl = _ensure_serving_control(db, project_id)
+    champion = _get_champion_entry(db, project_id)
+    challenger = _get_latest_challenger_entry(db, project_id)
+    return {
+        "project_id": project_id,
+        "champion_version": champion.version if champion else None,
+        "challenger_version": challenger.version if challenger else None,
+        "champion_latency_ms": ctrl.champion_latency_ms,
+        "challenger_latency_ms": ctrl.challenger_latency_ms,
+        "shadow_request_count": int(ctrl.shadow_request_count or 0),
+        "shadow_error_count": int(ctrl.shadow_error_count or 0),
+        "last_request_at": ctrl.last_request_at,
+    }
+
 @app.get("/project/{project_id}/status", response_model=schemas.RecommenderProject)
 def get_project_status(
     project_id: int,
@@ -1211,8 +1555,16 @@ def delete_project(
             except OSError:
                 pass
     db.delete(db_project)
+    db.query(models.ModelRegistryEntry).filter(models.ModelRegistryEntry.project_id == project_id).delete()
+    db.query(models.ServingControl).filter(models.ServingControl.project_id == project_id).delete()
     db.commit()
     evict_vector_store(project_id)
+    try:
+        registry_project_dir = os.path.join(PROJECT_MODELS_DIR, "registry", f"project_{project_id}")
+        if os.path.isdir(registry_project_dir):
+            shutil.rmtree(registry_project_dir)
+    except Exception:
+        pass
     try:
         FeatureStore.delete_project_features(db, project_id)
     except Exception:
@@ -1621,7 +1973,7 @@ def normalize_context_to_project_columns(
 
 
 @app.get("/project/{project_id}/recommendations", response_model=schemas.RecommendationResponse)
-def get_recommendations(
+async def get_recommendations(
     request: Request,
     project_id: int,
     background_tasks: BackgroundTasks,
@@ -1650,35 +2002,17 @@ def get_recommendations(
     # parameter_driven and hybrid: either context (filter by) or item_title (recommend similar to this item) or both
 
     try:
-        local_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
-        if not os.path.isdir(local_model_path):
-            raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
-        model_uri = _path_to_file_uri(local_model_path)
-        print(f"Loading model from: {local_model_path}")
-        print(f"Model type: {model_type}, user_id: {user_id}, item_title: {item_title}, context: {context if model_type == models.ModelType.PARAMETER_DRIVEN else 'N/A'}")
-
-        model = mlflow.pyfunc.load_model(model_uri)
-        print("Model loaded successfully")
-
-        if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
-            row = {**context, "n": n}
-            if item_title:
-                row["item_title"] = item_title
-            model_input = pd.DataFrame([row])
-        else:
-            model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
-        print(f"Model input: {model_input.to_dict('records')}")
-
-        result_json = model.predict(model_input)[0]
-        result = json.loads(result_json)
-
-        if result.get("error"):
-            raise ValueError(result["error"])
-
-        recs = result.get("recommendations")
-        if recs is not None and not isinstance(recs, list):
-            recs = []
-        if recs is None:
+        pred = await _predict_project(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=project_id,
+            context=context,
+            item_title=item_title,
+            user_id=user_id,
+            n=n,
+        )
+        recs = pred.get("recommendations") if isinstance(pred, dict) else []
+        if not isinstance(recs, list):
             recs = []
 
         preview = []
@@ -1940,46 +2274,73 @@ async def _predict_project(
 
     model_type = db_project.model_type
 
-    # Build input context depending on model type.
-    # For parameter-driven + hybrid: context keys must be feature columns.
-    reserved = {"user_id", "item_title", "n"}
-    feature_context = {k: v for k, v in (context or {}).items() if k not in reserved and v is not None and str(v).strip()}
+    champion = _get_champion_entry(db, project_id)
+    champion_path = champion.model_path if champion and champion.model_path else os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
 
-    local_model_path = os.path.join(PROJECT_MODELS_DIR, f"project_{project_id}")
-    if not os.path.isdir(local_model_path):
-        raise HTTPException(status_code=404, detail="Model not found. Re-train the project.")
-    model_uri = _path_to_file_uri(local_model_path)
+    champion_pred = _run_prediction_for_model(
+        model_path=champion_path,
+        model_type=model_type,
+        context=context,
+        item_title=item_title,
+        user_id=user_id,
+        n=n,
+    )
 
-    model = mlflow.pyfunc.load_model(model_uri)
+    serving_ctrl = _ensure_serving_control(db, project_id)
+    serving_ctrl.last_request_at = datetime.now(timezone.utc)
+    serving_ctrl.champion_latency_ms = champion_pred["latency_ms"]
 
-    if model_type in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
-        row: Dict[str, Any] = {**feature_context, "n": n}
-        if item_title:
-            row["item_title"] = item_title
-        model_input = pd.DataFrame([row])
-    else:
-        # content or collaborative: wrapper expects both `item_title` and `user_id` keys (only relevant one is used).
-        if model_type == models.ModelType.CONTENT and not item_title:
-            raise HTTPException(status_code=400, detail="item_title is required for this content-based model.")
-        if model_type == models.ModelType.COLLABORATIVE and not user_id:
-            raise HTTPException(status_code=400, detail="user_id is required for this collaborative model.")
-        model_input = pd.DataFrame([{"user_id": user_id, "item_title": item_title, "n": n}])
+    challenger = _get_latest_challenger_entry(db, project_id)
+    shadow_ran = False
+    shadow_error = None
+    shadow_latency_ms = None
 
-    result_json = model.predict(model_input)[0]
-    result = json.loads(result_json)
+    if (
+        serving_ctrl.shadow_enabled
+        and challenger is not None
+        and challenger.model_path
+        and os.path.isdir(challenger.model_path)
+        and random.random() < (max(0, min(100, int(serving_ctrl.shadow_percentage))) / 100.0)
+    ):
+        shadow_ran = True
+        serving_ctrl.shadow_request_count = int(serving_ctrl.shadow_request_count or 0) + 1
+        try:
+            shadow_pred = _run_prediction_for_model(
+                model_path=challenger.model_path,
+                model_type=model_type,
+                context=context,
+                item_title=item_title,
+                user_id=user_id,
+                n=n,
+            )
+            shadow_latency_ms = shadow_pred["latency_ms"]
+            serving_ctrl.challenger_latency_ms = shadow_latency_ms
+        except Exception as e:
+            shadow_error = str(e)
+            serving_ctrl.shadow_error_count = int(serving_ctrl.shadow_error_count or 0) + 1
 
-    if result.get("error"):
-        raise HTTPException(status_code=400, detail=result["error"])
+    db.commit()
 
-    recs = result.get("recommendations")
-    if recs is None or not isinstance(recs, list):
-        recs = []
+    if serving_ctrl.latency_warn_ms and champion_pred["latency_ms"] > float(serving_ctrl.latency_warn_ms):
+        print(
+            f"[serving] Latency warning for project {project_id}: champion={champion_pred['latency_ms']}ms "
+            f"threshold={serving_ctrl.latency_warn_ms}ms"
+        )
 
     return {
         "model_type": str(model_type),
-        "recommendations": recs,
+        "recommendations": champion_pred["recommendations"],
         "input_item_title": item_title,
         "input_user_id": user_id,
+        "serving": {
+            "champion_version": champion.version if champion else None,
+            "champion_latency_ms": champion_pred["latency_ms"],
+            "shadow_enabled": bool(serving_ctrl.shadow_enabled),
+            "shadow_ran": shadow_ran,
+            "shadow_version": challenger.version if (shadow_ran and challenger) else None,
+            "shadow_latency_ms": shadow_latency_ms,
+            "shadow_error": shadow_error,
+        },
     }
 
 

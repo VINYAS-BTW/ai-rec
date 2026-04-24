@@ -13,21 +13,65 @@ This file tracks the major items still pending compared to the target SuperAgent
   - End-to-end validation: events successfully flow from backend → Kafka → consumer → PostgreSQL
   - See KAFKA_SETUP.md and TEAM_SETUP.md for detailed setup
 
+- **Add schema governance: schema registry + compatibility checks before publishing events** ✅ Implemented:
+  - Docker service: Confluent Schema Registry on `http://localhost:8081`
+  - Subject compatibility policy: `BACKWARD` (configurable via env)
+  - Producers now register/check JSON schema under subject `rec.events.v1-value` before publishing
+  - Producers attach schema metadata headers (`schema-id`, `schema-subject`, `schema-version`) on events
+
+- **Implement stream processor + online feature updater for near-real-time signals** ✅ Implemented:
+  - Upgraded Kafka worker to real-time processor mode (`realtime-v2`) with batch-aware consumption
+  - Controlled partition concurrency via `KAFKA_PARTITIONS_CONSUMED_CONCURRENTLY`
+  - Low-latency commit strategy with heartbeat-safe processing and lag threshold alerts
+  - Continues to update online feature rollups and retrain triggers from live events
+
+- **Formalize model registry/service lifecycle (champion/challenger, promotion/retire flow)** ✅ Implemented:
+  - Added persistent model registry table with per-project version history and lifecycle roles
+  - New training snapshots now register as champion (first model) or challenger (subsequent models)
+  - Added promote endpoint to switch champion and retire previous champion
+  - Added retire endpoint for non-champion versions
+
+- **Add model serving controls such as shadow traffic and latency monitoring** ✅ Implemented:
+  - Added per-project serving controls (`shadow_enabled`, `shadow_percentage`, `latency_warn_ms`)
+  - Inference now serves champion path with optional shadow challenger execution
+  - Captures champion/challenger latency and shadow error/request counters
+  - Added serving controls and serving metrics endpoints
+
+- **Introduce a dedicated feature store service (online + offline feature access patterns)** ✅ Implemented:
+  - Postgres-backed feature store with `user_features` and `item_features`
+  - Training-time bulk materialization and online upserts for live feedback loops
+  - Read APIs for single-entity lookup and admin/debug listings
+
+- **Add vector DB for embeddings/similarity search (users/items)** ✅ Implemented:
+  - Per-project FAISS vector store for items and users
+  - Training-time index build and persisted indexes next to the model artifacts
+  - Read APIs for similar items/users and vector-store status
+
 ## High Priority
 
-- Add schema governance: schema registry + compatibility checks before publishing events.
 - Implement resilience controls: retry policy, circuit breaker, timeout, fallback.
 - Add persistent session management for SuperAgent (replace in-memory session store).
 - Implement cache service for frequently requested recommendations/context options.
 
+## SuperAgent Architecture Gaps
+
+- Formalize the `IAgent` and `IMediator` contracts across the Python and Node services so agents are plug-and-play.
+- Add an explicit agent registry for dynamic `resolveAgent(domain)` lookup instead of hard-coded domain dispatch.
+- Implement mediator routing and broadcast flows for fan-out to multiple agents and response coordination.
+- Add a recommendation aggregation layer that merges and ranks results from multiple agents consistently.
+- Define federated data access hooks (`fetchData`, `getUserProfile`) with access checks and shared context propagation.
+- Add explicit feedback submission flow from client/UI into the mediator and feedback loop.
+- Add runtime observability hooks for latency monitoring, per-agent health, and pod/service monitoring.
+
 ## Data & ML Platform
 
-- Introduce a dedicated feature store service (online + offline feature access patterns).
-- Add vector DB for embeddings/similarity search (users/items).
-- Implement stream processor + online feature updater for near-real-time signals.
 - Add data lake and warehouse pipelines for raw + aggregated analytics data.
-- Formalize model registry/service lifecycle (champion/challenger, promotion/retire flow).
-- Add model serving controls such as shadow traffic and latency monitoring.
+
+### Feedback Loop Gaps Still to Close
+
+- Online feature updater for user/item embeddings from fresh Kafka events.
+- Feedback producer hardening for richer negative/implicit signals (skip + dwell) at every relevant UI/API touchpoint.
+- ETL retrain trigger hardening and observability so retraining fires only after enough fresh feedback accumulates.
 
 ## Agent & Recommendation Intelligence
 
@@ -70,7 +114,6 @@ This file tracks the major items still pending compared to the target SuperAgent
 
 ### Milestone 3: Advanced ML Platform
 
-- Feature store + vector DB
 - Model registry/service lifecycle hardening
 - Explainability + business rules
 - Experiment service

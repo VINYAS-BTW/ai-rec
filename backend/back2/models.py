@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Enum, DateTime
+from sqlalchemy import Column, Integer, String, ForeignKey, Enum, DateTime, Boolean, Float, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -96,4 +96,46 @@ class ItemFeatureRow(Base):
     project_id = Column(Integer, index=True, nullable=False)
     item_id = Column(String, index=True, nullable=False)
     features_json = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# --- Model Registry & Serving Controls ---
+
+class ModelRegistryRole(str, enum.Enum):
+    CHAMPION = "champion"
+    CHALLENGER = "challenger"
+    RETIRED = "retired"
+
+
+class ModelRegistryEntry(Base):
+    __tablename__ = "model_registry_entries"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    owner_id = Column(Integer, index=True, nullable=True)
+    model_type = Column(String, nullable=True)
+    version = Column(Integer, nullable=False)
+    role = Column(String, nullable=False, default=ModelRegistryRole.CHALLENGER)
+    model_path = Column(String, nullable=False)
+    metrics_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    promoted_at = Column(DateTime(timezone=True), nullable=True)
+    retired_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class ServingControl(Base):
+    __tablename__ = "serving_controls"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False, unique=True)
+    shadow_enabled = Column(Boolean, nullable=False, default=False)
+    shadow_percentage = Column(Integer, nullable=False, default=10)
+    latency_warn_ms = Column(Integer, nullable=False, default=500)
+    champion_latency_ms = Column(Float, nullable=True)
+    challenger_latency_ms = Column(Float, nullable=True)
+    shadow_request_count = Column(Integer, nullable=False, default=0)
+    shadow_error_count = Column(Integer, nullable=False, default=0)
+    last_request_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

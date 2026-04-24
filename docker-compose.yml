@@ -18,7 +18,7 @@ services:
   kafka:
     image: apache/kafka:4.2.0
     ports:
-      - "9093:9092"
+      - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -29,7 +29,20 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+    restart: unless-stopped
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.7.1
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+    depends_on:
+      - kafka
     restart: unless-stopped
 
   auth:
@@ -59,6 +72,11 @@ services:
       WEBHOOK_SERVICE_URL: http://webhooks:3001
       KAFKA_BROKERS: kafka:29092
       EVENT_LOGGING_ENABLED: "true"
+      SCHEMA_REGISTRY_ENABLED: "true"
+      SCHEMA_REGISTRY_REQUIRED: "true"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KAFKA_SCHEMA_SUBJECT: rec.events.v1-value
+      SCHEMA_REGISTRY_COMPATIBILITY: BACKWARD
       USER_UPLOADS_DIR: /app/user_uploads
       USER_UPLOADS_FALLBACK_DIRS: /app/user_uploads
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
@@ -69,6 +87,7 @@ services:
     depends_on:
       - db
       - kafka
+      - schema-registry
     restart: unless-stopped
 
   webhooks:
@@ -84,26 +103,38 @@ services:
       BACK2_RETRAIN_URL: http://back2:8000
       KAFKA_BROKERS: kafka:29092
       EVENT_LOGGING_ENABLED: "true"
+      SCHEMA_REGISTRY_ENABLED: "true"
+      SCHEMA_REGISTRY_REQUIRED: "true"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KAFKA_SCHEMA_SUBJECT: rec.events.v1-value
+      SCHEMA_REGISTRY_COMPATIBILITY: BACKWARD
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
     depends_on:
       - db
       - kafka
+      - schema-registry
       - back2
     restart: unless-stopped
 
   webhooks-consumer:
     build:
       context: ./backend/webhooks_services
-    command: npm run start:consumer
+    command: npm run start:realtime-processor
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/airec
       BACK2_INTERNAL_KEY: dev-internal-key
       BACK2_RETRAIN_URL: http://back2:8000
       KAFKA_BROKERS: kafka:29092
       EVENT_LOGGING_ENABLED: "true"
+      SCHEMA_REGISTRY_ENABLED: "true"
+      SCHEMA_REGISTRY_REQUIRED: "true"
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KAFKA_SCHEMA_SUBJECT: rec.events.v1-value
+      SCHEMA_REGISTRY_COMPATIBILITY: BACKWARD
     depends_on:
       - db
       - kafka
+      - schema-registry
       - back2
     restart: unless-stopped
 

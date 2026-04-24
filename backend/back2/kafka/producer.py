@@ -4,6 +4,9 @@ import hashlib
 import json
 import logging
 import os
+import urllib.request
+import urllib.error
+import urllib.parse
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -24,11 +27,53 @@ SUPPORTED_SCHEMA_VERSIONS = {CURRENT_SCHEMA_VERSION}
 CB_FAILURE_THRESHOLD: int = int(os.getenv("KAFKA_CB_FAILURE_THRESHOLD", "5"))
 CB_WINDOW_SECONDS: int = int(os.getenv("KAFKA_CB_WINDOW_MS", "60000")) // 1000
 CB_COOLDOWN_SECONDS: int = int(os.getenv("KAFKA_CB_COOLDOWN_MS", "30000")) // 1000
+SCHEMA_REGISTRY_ENABLED: bool = os.getenv("SCHEMA_REGISTRY_ENABLED", "false").lower() == "true"
+SCHEMA_REGISTRY_REQUIRED: bool = os.getenv("SCHEMA_REGISTRY_REQUIRED", "true").lower() != "false"
+SCHEMA_REGISTRY_URL: str = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8081").rstrip("/")
+KAFKA_SCHEMA_SUBJECT: str = os.getenv("KAFKA_SCHEMA_SUBJECT", f"{TOPIC}-value")
+SCHEMA_REGISTRY_COMPATIBILITY: str = os.getenv("SCHEMA_REGISTRY_COMPATIBILITY", "BACKWARD")
+SCHEMA_REGISTRY_TIMEOUT_SECONDS: int = int(os.getenv("SCHEMA_REGISTRY_TIMEOUT_MS", "5000")) // 1000
+
+EVENT_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": True,
+    "required": ["event_id", "event_type", "schema_version", "occurred_at", "source_service"],
+    "properties": {
+        "event_id": {"type": "string", "minLength": 1},
+        "event_type": {
+            "type": "string",
+            "enum": ["click", "rating", "skip", "dwell", "recommendation_served", "training_completed"],
+        },
+        "schema_version": {"type": "integer", "minimum": 1},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "source_service": {"type": "string", "minLength": 1},
+        "api_route": {"type": ["string", "null"]},
+        "project_id": {"type": ["integer", "string", "null"]},
+        "user_id": {"type": ["integer", "string", "null"]},
+        "app_name": {"type": ["string", "null"]},
+        "api_key_hash": {"type": ["string", "null"]},
+        "session_id": {"type": ["string", "null"]},
+        "correlation_id": {"type": ["string", "null"]},
+        "item_id": {"type": ["string", "integer", "null"]},
+        "item_title": {"type": ["string", "null"]},
+        "rating_value": {"type": ["number", "null"]},
+        "dwell_time_ms": {"type": ["number", "integer", "null"]},
+        "recommendation_count": {"type": ["integer", "null"]},
+        "recommendations_preview": {"type": ["array", "null"]},
+        "metadata": {"type": "object"},
+    },
+}
 
 # Lazy-imported so aiokafka is optional (service starts without it)
 _producer = None
 _producer_lock = asyncio.Lock() if asyncio.get_event_loop().is_running() else None
+_schema_lock = asyncio.Lock() if asyncio.get_event_loop().is_running() else None
 _breaker = {"failures": [], "open_until": 0}
+_schema_registry = {
+    "ready": not SCHEMA_REGISTRY_ENABLED,
+    "schema_id": None,
+    "last_error": None,
+}
 _status: Dict[str, Any] = {
     "last_attempt_at": None,
     "last_success_at": None,
@@ -81,6 +126,109 @@ def _record_failure() -> None:
 def _record_success() -> None:
     _breaker["failures"] = []
     _breaker["open_until"] = 0
+
+
+def _schema_registry_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    req = urllib.request.Request(
+        url=f"{SCHEMA_REGISTRY_URL}{path}",
+        method=method,
+        headers={
+            "Content-Type": "application/vnd.schemaregistry.v1+json",
+            "Accept": "application/vnd.schemaregistry.v1+json",
+        },
+    )
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+    try:
+        with urllib.request.urlopen(req, data=body, timeout=max(1, SCHEMA_REGISTRY_TIMEOUT_SECONDS)) as res:
+            raw = res.read().decode("utf-8") if res.length != 0 else ""
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    parsed = {"raw": raw}
+            else:
+                parsed = None
+            return {"ok": True, "status": res.status, "body": parsed}
+    except urllib.error.HTTPError as err:
+        raw = err.read().decode("utf-8") if err.fp else ""
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = {"raw": raw}
+        else:
+            parsed = None
+        return {"ok": False, "status": err.code, "body": parsed}
+
+
+async def _ensure_schema_registry_ready() -> bool:
+    global _schema_lock
+
+    if not SCHEMA_REGISTRY_ENABLED:
+        return True
+    if _schema_registry["ready"] and _schema_registry["schema_id"]:
+        return True
+
+    if _schema_lock is None:
+        _schema_lock = asyncio.Lock()
+
+    async with _schema_lock:
+        if _schema_registry["ready"] and _schema_registry["schema_id"]:
+            return True
+
+        payload = {
+            "schemaType": "JSON",
+            "schema": json.dumps(EVENT_JSON_SCHEMA),
+        }
+        subject = urllib.parse.quote(KAFKA_SCHEMA_SUBJECT, safe="")
+
+        try:
+            await asyncio.to_thread(
+                _schema_registry_request,
+                "PUT",
+                f"/config/{subject}",
+                {"compatibility": SCHEMA_REGISTRY_COMPATIBILITY},
+            )
+
+            compatibility = await asyncio.to_thread(
+                _schema_registry_request,
+                "POST",
+                f"/compatibility/subjects/{subject}/versions/latest",
+                payload,
+            )
+            if compatibility["status"] != 404 and compatibility["ok"] and compatibility["body"] and compatibility["body"].get("is_compatible") is False:
+                raise RuntimeError(f"Schema incompatible for subject {KAFKA_SCHEMA_SUBJECT}")
+
+            register = await asyncio.to_thread(
+                _schema_registry_request,
+                "POST",
+                f"/subjects/{subject}/versions",
+                payload,
+            )
+            if (not register["ok"]) or (not register["body"]) or (not register["body"].get("id")):
+                raise RuntimeError(f"Schema register failed: HTTP {register['status']}")
+
+            _schema_registry["ready"] = True
+            _schema_registry["schema_id"] = str(register["body"]["id"])
+            _schema_registry["last_error"] = None
+            logger.info(
+                "[kafka/producer] Schema Registry ready: subject=%s id=%s compatibility=%s",
+                KAFKA_SCHEMA_SUBJECT,
+                _schema_registry["schema_id"],
+                SCHEMA_REGISTRY_COMPATIBILITY,
+            )
+            return True
+
+        except Exception as exc:
+            _schema_registry["ready"] = False
+            _schema_registry["schema_id"] = None
+            _schema_registry["last_error"] = str(exc)
+            if SCHEMA_REGISTRY_REQUIRED:
+                raise
+            logger.warning("[kafka/producer] Schema Registry bootstrap failed: %s", exc)
+            return False
 
 
 def validate_event(event: Dict) -> Optional[str]:
@@ -237,6 +385,20 @@ async def emit_event(partial: Dict[str, Any]) -> Optional[str]:
         )
         return None
 
+    try:
+        registry_ok = await _ensure_schema_registry_ready()
+    except Exception as exc:
+        _status["total_failures"] += 1
+        _status["last_error"] = f"schema registry required: {exc}"
+        logger.warning("[kafka/producer] Schema Registry required but unavailable — event dropped: %s", exc)
+        return None
+
+    if SCHEMA_REGISTRY_ENABLED and not registry_ok:
+        _status["total_failures"] += 1
+        _status["last_error"] = _schema_registry["last_error"] or "schema registry unavailable"
+        logger.warning("[kafka/producer] Schema Registry unavailable — event dropped")
+        return None
+
     # ── Enrich ────────────────────────────────────────────────────────────────
     try:
         schema_version = int(partial.get("schema_version") or CURRENT_SCHEMA_VERSION)
@@ -314,6 +476,13 @@ async def emit_event(partial: Dict[str, Any]) -> Optional[str]:
             headers=[
                 ("event-type",    event["event_type"].encode()),
                 ("source-service", event["source_service"].encode()),
+                *((
+                    [
+                        ("schema-id", _schema_registry["schema_id"].encode()),
+                        ("schema-subject", KAFKA_SCHEMA_SUBJECT.encode()),
+                        ("schema-version", str(event["schema_version"]).encode()),
+                    ]
+                ) if (_schema_registry.get("schema_id") and SCHEMA_REGISTRY_ENABLED) else []),
             ],
         )
         _record_success()
@@ -355,6 +524,13 @@ def get_kafka_status() -> Dict[str, Any]:
         "last_event_type": _status["last_event_type"],
         "total_success": _status["total_success"],
         "total_failures": _status["total_failures"],
+        "schema_registry_enabled": SCHEMA_REGISTRY_ENABLED,
+        "schema_registry_required": SCHEMA_REGISTRY_REQUIRED,
+        "schema_registry_url": SCHEMA_REGISTRY_URL,
+        "schema_subject": KAFKA_SCHEMA_SUBJECT,
+        "schema_registry_ready": _schema_registry["ready"],
+        "schema_registry_schema_id": _schema_registry["schema_id"],
+        "schema_registry_last_error": _schema_registry["last_error"],
     }
 
 

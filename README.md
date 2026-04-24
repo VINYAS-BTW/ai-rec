@@ -290,7 +290,7 @@ In another terminal, from the same folder:
 
 ```bash
 cd backend/webhooks_services
-npm run start:consumer
+npm run start:realtime-processor
 ```
 
 This subscribes to `rec.events.v1` and persists events to PostgreSQL. Output should show:
