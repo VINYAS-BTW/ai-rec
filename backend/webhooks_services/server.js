@@ -2,6 +2,7 @@ import "./loadEnv.js";
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
+import { rateLimit } from "express-rate-limit";
 import { db, ready } from "./db/index.js";
 import webhookRoutes from "./routes/webhooks.js";
 import appRoutes from "./routes/apps.js";
@@ -72,10 +73,26 @@ app.use(
 );
 app.use(bodyParser.json());
 
-app.use("/api/webhooks", webhookRoutes);
-app.use("/api/apps", appRoutes);
-app.use("/api/recommend", recommendRoutes);
-app.use("/api/events", apiKeyMiddleware, eventRoutes);
+const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+
+const sensitiveRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Rate limit exceeded for this endpoint." },
+});
+
+app.use("/api/webhooks", apiRateLimiter, webhookRoutes);
+app.use("/api/apps", sensitiveRateLimiter, appRoutes);
+app.use("/api/recommend", sensitiveRateLimiter, recommendRoutes);
+app.use("/api/events", sensitiveRateLimiter, apiKeyMiddleware, eventRoutes);
 
 app.get("/", (req, res) => res.send("Webhook service running 🚀"));
 app.get("/health", (req, res) => res.json({ ok: true, service: "webhooks" }));

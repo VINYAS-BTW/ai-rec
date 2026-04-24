@@ -5,12 +5,28 @@ import { eq, sql } from "drizzle-orm";
 import axios from "axios";
 import { emitEvent } from "../kafka/producer.js";
 import { cacheGetOrSet } from "../utils/cache.js";
+import { z } from "zod";
 
 const router = express.Router();
+const recommendBodySchema = z.object({
+  project_id: z.coerce.number().int().positive(),
+  item_title: z.string().trim().min(1).optional(),
+  user_id: z.union([z.string(), z.number()]).optional(),
+  session_id: z.union([z.string(), z.number()]).optional(),
+  correlation_id: z.union([z.string(), z.number()]).optional(),
+});
 
 router.post("/", async (req, res) => {
-  const { project_id, item_title, user_id } = req.body;
   const apiKey = req.headers["x-api-key"];
+  const parsedBody = recommendBodySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      error: "Invalid request body",
+      details: parsedBody.error.flatten(),
+    });
+  }
+  const { project_id, item_title, user_id, session_id, correlation_id } =
+    parsedBody.data;
 
   console.log("📥 Incoming request:", { project_id, item_title, user_id });
 
@@ -67,12 +83,11 @@ router.post("/", async (req, res) => {
       source_service: "webhooks-service",
       api_route: req.originalUrl,
       project_id: req.project?.id || req.body.project_id || null,
-      user_id: req.body.user_id || null,
+      user_id: user_id || null,
       app_name: app.app_name,
       _raw_api_key: req.rawApiKey || apiKey || null,
-      session_id: req.body.session_id || req.headers["x-session-id"] || null,
-      correlation_id:
-        req.body.correlation_id || req.headers["x-correlation-id"] || null,
+      session_id: session_id || req.headers["x-session-id"] || null,
+      correlation_id: correlation_id || req.headers["x-correlation-id"] || null,
       recommendation_count: (
         recData.recommendations ||
         recData.data?.recommendations ||

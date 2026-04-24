@@ -2,10 +2,30 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import * as User from "../models/user.js";
+import { z } from "zod";
+
+const signupSchema = z.object({
+  name: z.string().trim().min(1),
+  email: z.string().trim().email(),
+  password: z.string().min(6),
+});
+
+const loginSchema = z.object({
+  email: z.string().trim().email(),
+  password: z.string().min(1),
+});
 
 export const signup = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const parsed = signupSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid request body",
+        success: false,
+        details: parsed.error.flatten(),
+      });
+    }
+    const { name, email, password } = parsed.data;
     const existingUser = await User.findByEmail(email);
     if (existingUser) {
       return res.status(409).json({
@@ -30,7 +50,15 @@ export const signup = async (req, res) => {
 
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid request body",
+        success: false,
+        details: parsed.error.flatten(),
+      });
+    }
+    const { email, password } = parsed.data;
     const existingUser = await User.findByEmail(email);
     if (!existingUser) {
       return res.status(403).json({

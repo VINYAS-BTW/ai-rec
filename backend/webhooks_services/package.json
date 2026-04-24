@@ -23,11 +23,13 @@
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.4.0",
     "ioredis": "^5.10.1",
     "kafkajs": "^2.2.4",
     "node-fetch": "^3.3.2",
     "pg": "^8.13.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.8"

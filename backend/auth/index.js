@@ -4,6 +4,7 @@ import "./loadEnv.js";
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
+import { rateLimit } from "express-rate-limit";
 import { connectDB } from "./db/index.js";
 import AuthRoute from "./routes/AuthRoute.js";
 
@@ -36,7 +37,18 @@ app.use(
 );
 app.use(bodyParser.json());
 
-app.use("/auth", AuthRoute);
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many authentication attempts, please try again later.",
+  },
+});
+
+app.use("/auth", authRateLimiter, AuthRoute);
 
 app.get("/", (req, res) => res.send("pong"));
 

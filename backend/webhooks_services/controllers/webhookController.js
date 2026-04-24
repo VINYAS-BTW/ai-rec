@@ -1,12 +1,28 @@
 import axios from "axios";
 import { db } from "../db/index.js";
 import { apps } from "../db/schema.js";
+import { z } from "zod";
+
+const registerWebhookSchema = z.object({
+  app_name: z.string().trim().min(1),
+  webhook_url: z.string().trim().url(),
+});
+
+const triggerWebhookSchema = z.object({
+  event: z.string().trim().min(1),
+  data: z.unknown().optional(),
+});
 
 export const registerWebhook = async (req, res) => {
   try {
-    const { app_name, webhook_url } = req.body;
-    if (!app_name || !webhook_url)
-      return res.status(400).json({ error: "Missing app_name or webhook_url" });
+    const parsed = registerWebhookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.flatten(),
+      });
+    }
+    const { app_name, webhook_url } = parsed.data;
 
     const [row] = await db
       .insert(apps)
@@ -31,7 +47,14 @@ export const listWebhooks = async (req, res) => {
 
 export const triggerWebhooks = async (req, res) => {
   try {
-    const { event, data } = req.body;
+    const parsed = triggerWebhookSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.flatten(),
+      });
+    }
+    const { event, data } = parsed.data;
     const rows = await db.select({ webhook_url: apps.webhook_url }).from(apps);
 
     const results = [];

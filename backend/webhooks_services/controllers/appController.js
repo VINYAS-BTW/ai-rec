@@ -1,16 +1,23 @@
 import crypto from "crypto";
 import { db } from "../db/index.js";
 import { apps, usage } from "../db/schema.js";
+import { z } from "zod";
+
+const registerAppSchema = z.object({
+  app_name: z.string().trim().min(1),
+  webhook_url: z.string().trim().url(),
+});
 
 export const registerApp = async (req, res) => {
   try {
-    const { app_name, webhook_url } = req.body;
-
-    if (!app_name || !webhook_url) {
-      return res
-        .status(400)
-        .json({ error: "App name and webhook URL are required" });
+    const parsed = registerAppSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request body",
+        details: parsed.error.flatten(),
+      });
     }
+    const { app_name, webhook_url } = parsed.data;
 
     const apiKey = crypto.randomBytes(16).toString("hex");
 
