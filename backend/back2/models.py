@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Enum
+from sqlalchemy import Column, Integer, String, ForeignKey, Enum, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from database import Base
 import enum
 
@@ -70,3 +71,29 @@ class SchemaMapping(Base):
 
     file_id = Column(Integer, ForeignKey("recommender.uploaded_files.id"))
     file = relationship("UploadedFile", back_populates="schema_mappings")
+
+
+# --- Feature Store Tables ---
+
+class UserFeatureRow(Base):
+    """Per-(project_id, user_id) feature bag for the feature store."""
+    __tablename__ = "user_features"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    user_id = Column(String, index=True, nullable=False)
+    features_json = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ItemFeatureRow(Base):
+    """Per-(project_id, item_id) feature bag for the feature store."""
+    __tablename__ = "item_features"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, index=True, nullable=False)
+    item_id = Column(String, index=True, nullable=False)
+    features_json = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

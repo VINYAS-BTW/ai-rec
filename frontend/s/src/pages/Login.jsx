@@ -40,7 +40,7 @@ export default function Login() {
       }
 
       toast.error(error || message || "Login failed");
-    } catch (err) {
+    } catch {
       toast.error("Network error. Is the auth server running?");
     } finally {
       setLoading(false);

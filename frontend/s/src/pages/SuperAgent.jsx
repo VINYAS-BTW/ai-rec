@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { Sparkles, Loader2, Send } from "lucide-react";
 import { API_BACKEND, getBackendAuthHeaders } from "../api";
@@ -17,13 +17,6 @@ export default function SuperAgent() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState([]); // { role, text, payload? }
-
-  const lastAssistant = useMemo(() => {
-    for (let i = transcript.length - 1; i >= 0; i -= 1) {
-      if (transcript[i].role === "assistant") return transcript[i];
-    }
-    return null;
-  }, [transcript]);
 
   const send = async () => {
     const msg = String(message || "").trim();
@@ -73,9 +66,17 @@ export default function SuperAgent() {
           },
         ]);
       } else {
+        const pid = data?.results?.[0]?.project_id;
+        const ctx = data?.used_context && Object.keys(data.used_context).length
+          ? JSON.stringify(data.used_context)
+          : "(no constraints — model used its default ranking)";
         setTranscript((t) => [
           ...t,
-          { role: "assistant", text: `OK — ${data.target_domain}`, payload: data },
+          {
+            role: "assistant",
+            text: `Domain: ${data.target_domain}${pid != null ? ` · project #${pid}` : ""}\nConstraints sent to the model: ${ctx}`,
+            payload: data,
+          },
         ]);
       }
     } catch (e) {
@@ -96,9 +97,11 @@ export default function SuperAgent() {
           <h1 className="text-3xl lg:text-4xl font-bold text-neutral-900 font-main tracking-tight">
             Chat → intent → recommendations
           </h1>
-          <p className="text-sm text-slate-600 max-w-2xl font-third leading-relaxed">
-            Ask in natural language. You can also include inline constraints like <code>mode=road</code>,{" "}
-            <code>region=North</code>, etc. If the agent can’t infer the domain, it will ask a clarifying question.
+            <p className="text-sm text-slate-600 max-w-2xl font-third leading-relaxed">
+            Use <strong>exact CSV column names</strong> as keys (e.g. <code>mode=road</code>, <code>region=North</code>). You
+            can chain several in one line: <code>mode=road region=North country=IN</code>. The same session remembers prior
+            constraints until you change them. If the domain is unclear, pick it from the dropdown or answer the clarify
+            prompt.
           </p>
         </motion.div>
 
@@ -154,7 +157,7 @@ export default function SuperAgent() {
                 transcript.map((m, idx) => (
                   <div key={idx} className={`text-sm ${m.role === "user" ? "text-slate-900" : "text-cyan-900"}`}>
                     <span className="font-bold font-third mr-2">{m.role === "user" ? "You" : "Agent"}</span>
-                    <span className="font-third">{m.text}</span>
+                    <span className="font-third whitespace-pre-wrap break-words">{m.text}</span>
                     {m.payload?.results?.[0]?.recommendations?.length ? (
                       <ul className="mt-2 ml-6 list-disc text-slate-700">
                         {m.payload.results[0].recommendations.slice(0, 10).map((r, i) => (

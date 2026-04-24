@@ -25,9 +25,11 @@ ai-rec/
 │   ├── agent_datasets/    # Preset CSV templates for domain agents
 │   └── webhooks_services/ # App registration + webhooks + recommend proxy; Drizzle ORM
 ├── frontend/s/            # React (Vite) dashboard
-├── external_client/       # Demo clients
-├── xternal_client/        # Legacy demo clients (MovieRec, MusicRec)
+├── external_client/       # Static demo pages (MovieRec, MusicRec)
+├── xternal_client/        # Legacy copies of the same demos (optional)
 ├── scripts/               # One-time DB schema setup (Neon)
+├── docs/                  # Design PDFs (optional; not required to run the app)
+├── PENDING_WORK.md        # Roadmap / future platform work
 └── example_datasets/      # Sample CSVs for movies/songs
 ```
 
@@ -55,6 +57,12 @@ BACK2_INTERNAL_KEY=your-internal-key-for-webhook-service
 ```
 
 Use the same DB (or one with a `recommender` schema). Tables are created on startup. **`JWT_SECRET`** must match the auth service so the ML backend can verify JWTs and scope projects per user. **`BACK2_INTERNAL_KEY`** (optional): set the same value in the webhooks service so it can call the ML backend for recommendations without a user JWT.
+
+Optional paths (same `.env` file when needed):
+
+- **`USER_UPLOADS_DIR`** — override where uploaded CSVs are stored (default: `backend/back2/user_uploads`).
+- **`USER_UPLOADS_FALLBACK_DIRS`** — comma-separated extra directories to resolve stale absolute paths from shared DBs.
+- **`WEBHOOK_SERVICE_URL`** — defaults to `http://localhost:3001` for `model_ready` notifications from back2.
 
 ### 3. Webhooks service (`backend/webhooks_services/.env`)
 
@@ -133,7 +141,7 @@ Create the schemas manually or run the same script with your local `DATABASE_URL
 
 ---
 
-## Run the app (5 terminals + optional)
+## Run the app (4 terminals + optional MLflow)
 
 ### Terminal 1 – Auth
 
@@ -151,10 +159,14 @@ Endpoints: `POST /auth/signup` (body: `{ name, email, password }`), `POST /auth/
 ```bash
 cd backend/back2
 pip install -r requirements.txt
-uvicorn saas_api:app --reload
+python -m uvicorn saas_api:app --reload --reload-exclude "project_models"
 ```
 
 → **http://localhost:8000**
+
+**Important (development):** use `--reload-exclude "project_models"` (or run `.\run-dev.ps1` from `backend/back2`). During training, MLflow writes copied Python files under `project_models/.../code/`; if the reloader watches that folder, **uvicorn restarts in the middle of training** and the project can stay stuck in `processing` or fail unpredictably.
+
+On Windows, prefer `python -m uvicorn ...` if `uvicorn` is not on your PATH.
 
 ### Terminal 3 – Webhooks & app registration
 
@@ -176,17 +188,7 @@ npm run dev
 
 → **http://localhost:5173**
 
-### Terminal 5 – Agent service (optional but recommended for full agent architecture)
-
-```bash
-cd backend/agent_service
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8002
-```
-
-→ **http://localhost:8002**
-
-### Terminal 6 (optional) – MLflow UI
+### Terminal 5 (optional) – MLflow UI
 
 ```bash
 cd backend/back2
@@ -194,6 +196,18 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
 ```
 
 (Windows CMD: `set MLFLOW_TRACKING_URI=...` then the same command.) → **http://localhost:5000**
+
+### Optional – standalone agent service (`backend/agent_service`)
+
+Only if you want the **same** domain/orchestrate HTTP API on a **separate** port (the main app already exposes `/agent/v1/*` on back2):
+
+```bash
+cd backend/agent_service
+pip install -r requirements.txt
+python -m uvicorn main:app --reload --port 8002
+```
+
+→ **http://localhost:8002**
 
 ---
 
@@ -211,7 +225,19 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
    Headers: `Content-Type: application/json`, `x-api-key: YOUR_API_KEY`  
    Body: `{ "project_id": 1, "item_title": "Some Movie", "user_id": "123" }` (omit `user_id` for content-only; omit `item_title` for collaborative-only).
 6. **Domain Agents page:** Train and query domain presets (logistics/supply-chain) from the frontend using `/agent/v1/*` endpoints in `back2`.
-7. **SuperAgent page:** Chat-style recommendation orchestration using `POST /superagent/v1/chat` with session memory and clarification prompts.
+7. **SuperAgent page:** Chat-style recommendation orchestration using `POST /superagent/v1/chat` with session memory, constraint parsing (`key=value` and space-separated pairs), and column names normalised to your CSV.
+
+---
+
+## ML API extras (vector + feature store)
+
+After a project reaches **ready**, back2 builds a small **FAISS** index under `project_models/project_<id>/vector_index/` and materialises **Postgres** feature rows (`recommender.item_features` / `user_features`). Typical checks (with user JWT):
+
+- `GET /project/<id>/vector-store/status`
+- `GET /project/<id>/vector-store/similar-items?item_id=...&n=10`
+- `GET /project/<id>/feature-store/items?limit=50`
+
+Requires **`faiss-cpu`** from `backend/back2/requirements.txt` (on some ARM Macs you may need a platform-specific FAISS build).
 
 ---
 
@@ -220,7 +246,8 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
 - **Core recommendation engine:** parameter-driven, content-based, collaborative, and hybrid training + inference.
 - **Project lifecycle APIs:** create project, retrain, status, list, delete, context options, and recommendation retrieval.
 - **Agent endpoints in `back2`:** domain recommend, orchestrate across domains, preset listing, context options, and preset/upload training flows.
-- **SuperAgent MVP in `back2`:** intent/domain inference from text, key/value context extraction, top-k inference, session memory, and clarify-first chat responses.
+- **SuperAgent MVP in `back2`:** intent/domain inference from text, key/value context extraction (including multi-pair lines), session-sticky constraints, column normalisation against the trained project, top-k inference, and clarify-first chat when domain or constraints are missing.
+- **Vector + feature store (MVP):** per-project FAISS similarity index and Postgres-backed feature bags, populated at end of training; HTTP endpoints for status, similar items/users, and feature listing/upsert.
 - **Webhook gateway:** app registration, API key validation, recommendation proxying, usage tracking, and async webhook pushes.
 - **Frontend modules:** Recommender Studio, Domain Agents, SuperAgent chat, and Webhook Dashboard.
 - **Auth:** email/password + Google OAuth routes with JWT verification on protected recommendation endpoints.
@@ -229,9 +256,8 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
 
 ## External demo clients
 
-- **MovieRec:** Open `xternal_client/MovieRec/index.html`. In `app.js` set `API_KEY` (from Webhook Dashboard) and `PROJECT` to an **existing** project ID (create one in the Dashboard first; list IDs: `GET http://localhost:8000/projects/`).
-- **MusicRec:** Open `xternal_client/MusicRec/index.html`.  
-To run with a static server: `npx serve xternal_client/MovieRec`.
+- **MovieRec / MusicRec:** Use `external_client/MovieRec` or `external_client/MusicRec` (same idea as `xternal_client/`). In each `app.js` set `API_KEY` from the Webhook Dashboard and `PROJECT` to an **existing** project ID (`GET http://localhost:8000/projects/` with your JWT).
+- Static server example: `npx serve external_client/MovieRec`
 
 ---
 
@@ -241,7 +267,7 @@ To run with a static server: `npx serve xternal_client/MovieRec`.
 |----------------|------|----------------------------|
 | Auth           | 8080 | Login, signup, JWT         |
 | ML recommender | 8000 | Projects, train, recommend |
-| Agent service  | 8002 | Optional agent layer API   |
+| Agent service (optional) | 8002 | Separate FastAPI mirror of `/agent/v1/*` |
 | Webhooks       | 3001 | Apps, API key, recommend   |
 | Frontend       | 5173 | React UI                   |
 | MLflow UI      | 5000 | Optional model registry    |
@@ -250,8 +276,12 @@ To run with a static server: `npx serve xternal_client/MovieRec`.
 
 ## Troubleshooting
 
+- **Training never finishes / stuck on “processing” (Recommender Studio or agent train):** Restart the ML API with `--reload-exclude "project_models"` (see Terminal 2 above). Without it, **auto-reload can kill the training task** when files appear under `backend/back2/project_models/`.
+- **`GET /agent/v1/context-options` returns 404:** There is no **READY** trained project for that domain for your user yet. Train a logistics/supply-chain preset from the Domain Agents tab (or upload matching data) until status is **ready**, then context options will load.
+- **`GET /projects/` returns 401:** Log in again; the frontend token expired or `JWT_SECRET` mismatches between auth and back2.
 - **CORS / connection errors:** Ensure Auth (8080), back2 (8000), and webhooks (3001) are running before using the frontend.
 - **"Project not found" (404):** The `project_id` (e.g. in MovieRec’s `PROJECT` or in the recommend API) must exist in the ML backend. Create a project in the Dashboard, wait until status is **Ready**, then use that ID (or list IDs with `GET http://localhost:8000/projects/`).
 - **"Project not found or not ready":** Wait until the project status is **Ready** after uploading data and training.
 - **Database errors:** Run the schema script (see [One-time database setup](#one-time-database-setup-neon-or-single-postgresql)) and check `DATABASE_URL` (and `MLFLOW_TRACKING_URI` for back2) in each `.env`.
 - **Content model error ("not in index" / empty column):** Ensure the content file has **item_id**, **item_title**, and at least one **feature** column mapped to real CSV columns (no empty mappings).
+- **SuperAgent always returns the same list:** Use **exact feature column names** from your CSV (`mode=road`, not free text). Put several pairs on one line or comma-separated; the same **session** remembers prior constraints. Check the assistant line *“Constraints sent to the model”* — if it shows none, the model fell back to frequency ranking.

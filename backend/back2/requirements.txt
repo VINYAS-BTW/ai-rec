@@ -5,10 +5,11 @@ sqlalchemy
 psycopg2-binary
 PyJWT
 pandas
+numpy
 scikit-learn
 mlflow
 scipy
 python-multipart
 aiofiles
 httpx
-fastapi-cors
+faiss-cpu

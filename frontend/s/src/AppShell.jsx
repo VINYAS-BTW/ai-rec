@@ -211,7 +211,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
           status: mlRes.ok ? "ok" : "degraded",
           latency: `${latencyML}ms`,
         };
-      } catch (error) {
+      } catch {
         results.mlBackend = { status: "degraded", latency: "offline" };
       }
 
@@ -226,7 +226,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
           status: webhookRes.ok ? "ok" : "degraded",
           latency: `${latencyWebhook}ms`,
         };
-      } catch (error) {
+      } catch {
         results.webhook = { status: "degraded", latency: "offline" };
       }
 
@@ -243,7 +243,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
           status: authRes.ok ? "ok" : "degraded",
           latency: `${latencyAuth}ms`,
         };
-      } catch (error) {
+      } catch {
         results.auth = { status: "degraded", latency: "offline" };
       }
 
@@ -276,7 +276,7 @@ const HomeOverview = ({ onNavigate, summary }) => {
   return (
     <ShellSection
       eyebrow="Workspace"
-      title="Welcome ,"
+      title={`Welcome, ${userName}`}
       description="Real-time operational status and performance metrics for your BaaS infrastructure."
     >
       <motion.div
