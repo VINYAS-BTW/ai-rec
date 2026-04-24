@@ -2,9 +2,19 @@
 
 This file tracks the major items still pending compared to the target SuperAgent architecture in `docs/superagent.pdf`.
 
+## Completed ✅
+
+- **Build event-driven backbone: Kafka/event bus** ✅ Implemented:
+  - Apache Kafka Docker broker running on localhost:9092
+  - Producer: async emit_event() in FastAPI backend (backend/back2/kafka/producer.py)
+  - Consumer: Kafka consumer in Node.js persisting to PostgreSQL (backend/webhooks_services/workers/eventConsumer.js)
+  - Event types: click, rating, skip, dwell, recommendation_served, **training_completed** (newly added)
+  - Topics: rec.events.v1 (events), rec.events.dlq.v1 (dead-letter queue)
+  - End-to-end validation: events successfully flow from backend → Kafka → consumer → PostgreSQL
+  - See KAFKA_SETUP.md and TEAM_SETUP.md for detailed setup
+
 ## High Priority
 
-- Build event-driven backbone: Kafka/event bus, topic strategy, replay/retention.
 - Add schema governance: schema registry + compatibility checks before publishing events.
 - Implement resilience controls: retry policy, circuit breaker, timeout, fallback.
 - Add persistent session management for SuperAgent (replace in-memory session store).

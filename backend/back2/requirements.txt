@@ -12,4 +12,6 @@ scipy
 python-multipart
 aiofiles
 httpx
+fastapi-cors
+aiokafka
 faiss-cpu
