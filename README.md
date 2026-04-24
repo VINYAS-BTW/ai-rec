@@ -18,6 +18,22 @@ A full-stack **recommendation platform (backend-as-a-service)** with ML models (
 - **PostgreSQL** (local or [Neon](https://neon.tech))
 - **Docker** (for Apache Kafka message broker; [download](https://www.docker.com/products/docker-desktop))
 
+## Docker Quick Start
+
+The repo now includes a root [docker-compose.yml](docker-compose.yml) that starts Postgres, Kafka, auth, the FastAPI ML backend, the webhook service, the webhook consumer, the optional agent service, and the frontend.
+
+```bash
+docker compose up --build
+```
+
+Then open:
+
+- Frontend: http://localhost:5173
+- Auth: http://localhost:8080
+- ML backend: http://localhost:8000
+- Webhooks: http://localhost:3001
+- Agent service: http://localhost:8002
+
 ---
 
 ## Project structure
@@ -155,13 +171,11 @@ Then set the **same** connection string in `backend/auth/.env`, `backend/webhook
 Create the schemas manually or run the same script with your local `DATABASE_URL`. Tables are created on app startup (Auth and Webhooks use Drizzle bootstrap; back2 uses Alembic/SQLAlchemy).
 
 ### Database & ORM
-
 - **Auth** and **Webhooks**: Drizzle ORM (`db/schema.js`, `db/index.js`). Optional: `npm run db:generate` / `npm run db:migrate` / `npm run db:studio` in each service.
 - **back2**: SQLAlchemy ORM; `recommender` schema. No extra migration step needed for first run.
 
 ---
 
-<<<<<<< HEAD
 ## Kafka setup (Docker)
 
 ### Start Kafka broker locally
@@ -243,12 +257,8 @@ docker run -d --name kafka-broker -p 9092:9092 \
 
 **Stop Kafka (when done):**
 
-```bash
 docker stop kafka-broker && docker rm kafka-broker
 ```
-=======
-## Run the app (4 terminals + optional MLflow)
->>>>>>> eeaee68231966b50ed22a0a5f9bc2237ff728f60
 
 ### Terminal 1 – Auth
 
@@ -260,7 +270,6 @@ npm start
 
 → **http://localhost:8080**  
 Endpoints: `POST /auth/signup` (body: `{ name, email, password }`), `POST /auth/login` (body: `{ email, password }` → returns `jwttoken`, `name`, `email`).
-
 ### Terminal 2 – ML recommender (FastAPI)
 
 ```bash
@@ -273,18 +282,8 @@ python -m uvicorn saas_api:app --reload --reload-exclude "project_models"
 
 **Important (development):** use `--reload-exclude "project_models"` (or run `.\run-dev.ps1` from `backend/back2`). During training, MLflow writes copied Python files under `project_models/.../code/`; if the reloader watches that folder, **uvicorn restarts in the middle of training** and the project can stay stuck in `processing` or fail unpredictably.
 
-On Windows, prefer `python -m uvicorn ...` if `uvicorn` is not on your PATH.
 
 ### Terminal 3 – Webhooks & app registration
-
-```bash
-cd backend/webhooks_services
-npm install
-npm start
-```
-
-→ **http://localhost:3001**
-
 ### Terminal 3b – Kafka event consumer (Node.js, same folder as Terminal 3)
 
 In another terminal, from the same folder:
@@ -314,7 +313,6 @@ npm run dev
 
 → **http://localhost:5173**
 
-<<<<<<< HEAD
 ### Terminal 5 (or 6) – Agent service (optional but recommended for full agent architecture)
 
 ```bash
@@ -326,9 +324,6 @@ uvicorn main:app --reload --port 8002
 → **http://localhost:8002**
 
 ### Terminal 6 (or 7) – MLflow UI (optional)
-=======
-### Terminal 5 (optional) – MLflow UI
->>>>>>> eeaee68231966b50ed22a0a5f9bc2237ff728f60
 
 ```bash
 cd backend/back2
@@ -339,7 +334,7 @@ mlflow ui --backend-store-uri $env:MLFLOW_TRACKING_URI --default-artifact-root .
 
 ### Optional – standalone agent service (`backend/agent_service`)
 
-Only if you want the **same** domain/orchestrate HTTP API on a **separate** port (the main app already exposes `/agent/v1/*` on back2):
+Only if you want the same domain/orchestrate HTTP API on a separate port (the main app already exposes `/agent/v1/*` on back2):
 
 ```bash
 cd backend/agent_service
@@ -355,15 +350,15 @@ python -m uvicorn main:app --reload --port 8002
 
 1. Open **http://localhost:5173**.
 2. **Sign up** or **log in** (auth on port 8080).
-3. **Recommender Studio:** Create a project.  
-   - **Single dataset (any CSV):** Choose “Single dataset – recommend any column by others”. Upload any CSV, set the **target** column (what to recommend) and **feature** columns (what to base recommendations on). Works for any domain.  
-   - **Content + Interaction:** Upload content and/or interaction CSVs, map columns (item_id, item_title, features for content; user_id, item_id, rating for interactions). Model types: content / collaborative / hybrid.  
-   Wait until status is **Ready**, then get recommendations (for single-dataset projects: set context from dropdowns; for content/collab/hybrid: by item title and/or user id). You can delete a project from the project list.
+3. **Recommender Studio:** Create a project.
+  - **Single dataset (any CSV):** Choose “Single dataset – recommend any column by others”. Upload any CSV, set the **target** column (what to recommend) and **feature** columns (what to base recommendations on). Works for any domain.
+  - **Content + Interaction:** Upload content and/or interaction CSVs, map columns (item_id, item_title, features for content; user_id, item_id, rating for interactions). Model types: content / collaborative / hybrid.
+  Wait until status is **Ready**, then get recommendations (for single-dataset projects: set context from dropdowns; for content/collab/hybrid: by item title and/or user id). You can delete a project from the project list.
 4. **Webhook Dashboard:** Register an app (name + webhook URL). Copy the **API key** for the external client or API calls.
-5. **Recommendations API** (with API key):  
-   `POST http://localhost:3001/api/recommend`  
-   Headers: `Content-Type: application/json`, `x-api-key: YOUR_API_KEY`  
-   Body: `{ "project_id": 1, "item_title": "Some Movie", "user_id": "123" }` (omit `user_id` for content-only; omit `item_title` for collaborative-only).
+5. **Recommendations API** (with API key):
+  `POST http://localhost:3001/api/recommend`
+  Headers: `Content-Type: application/json`, `x-api-key: YOUR_API_KEY`
+  Body: `{ "project_id": 1, "item_title": "Some Movie", "user_id": "123" }` (omit `user_id` for content-only; omit `item_title` for collaborative-only).
 6. **Domain Agents page:** Train and query domain presets (logistics/supply-chain) from the frontend using `/agent/v1/*` endpoints in `back2`.
 7. **SuperAgent page:** Chat-style recommendation orchestration using `POST /superagent/v1/chat` with session memory, constraint parsing (`key=value` and space-separated pairs), and column names normalised to your CSV.
 
@@ -377,7 +372,7 @@ After a project reaches **ready**, back2 builds a small **FAISS** index under `p
 - `GET /project/<id>/vector-store/similar-items?item_id=...&n=10`
 - `GET /project/<id>/feature-store/items?limit=50`
 
-Requires **`faiss-cpu`** from `backend/back2/requirements.txt` (on some ARM Macs you may need a platform-specific FAISS build).
+Requires **faiss-cpu** from `backend/back2/requirements.txt` (on some ARM Macs you may need a platform-specific FAISS build).
 
 ---
 
@@ -386,7 +381,7 @@ Requires **`faiss-cpu`** from `backend/back2/requirements.txt` (on some ARM Macs
 - **Core recommendation engine:** parameter-driven, content-based, collaborative, and hybrid training + inference.
 - **Project lifecycle APIs:** create project, retrain, status, list, delete, context options, and recommendation retrieval.
 - **Agent endpoints in `back2`:** domain recommend, orchestrate across domains, preset listing, context options, and preset/upload training flows.
-- **SuperAgent MVP in `back2`:** intent/domain inference from text, key/value context extraction (including multi-pair lines), session-sticky constraints, column normalisation against the trained project, top-k inference, and clarify-first chat when domain or constraints are missing.
+- **SuperAgent MVP in `back2`:** intent/domain inference from text, key/value context extraction, session-sticky constraints, column normalisation against the trained project, top-k inference, and clarify-first chat when domain or constraints are missing.
 - **Vector + feature store (MVP):** per-project FAISS similarity index and Postgres-backed feature bags, populated at end of training; HTTP endpoints for status, similar items/users, and feature listing/upsert.
 - **Webhook gateway:** app registration, API key validation, recommendation proxying, usage tracking, and async webhook pushes.
 - **Frontend modules:** Recommender Studio, Domain Agents, SuperAgent chat, and Webhook Dashboard.
@@ -396,54 +391,36 @@ Requires **`faiss-cpu`** from `backend/back2/requirements.txt` (on some ARM Macs
 
 ## External demo clients
 
-- **MovieRec / MusicRec:** Use `external_client/MovieRec` or `external_client/MusicRec` (same idea as `xternal_client/`). In each `app.js` set `API_KEY` from the Webhook Dashboard and `PROJECT` to an **existing** project ID (`GET http://localhost:8000/projects/` with your JWT).
+- **MovieRec / MusicRec:** Use `external_client/MovieRec` or `external_client/MusicRec` (same idea as `xternal_client/`). In each `app.js` set `API_KEY` from the Webhook Dashboard and `PROJECT` to an existing project ID (`GET http://localhost:8000/projects/` with your JWT).
 - Static server example: `npx serve external_client/MovieRec`
 
 ---
 
 ## Port summary
 
-<<<<<<< HEAD
-| Service        | Port | Purpose                                      |
-|----------------|------|----------------------------------------------|
-| Kafka broker   | 9092 | Event streaming (Docker)                    |
-| Auth           | 8080 | Login, signup, JWT                          |
-| ML recommender | 8000 | Projects, train, recommend, emit events     |
-| Agent service  | 8002 | Optional agent layer API                    |
-| Webhooks       | 3001 | Apps, API key, recommend, consume events    |
-| Frontend       | 5173 | React UI                                    |
-| MLflow UI      | 5000 | Optional model registry                     |
-=======
-| Service        | Port | Purpose                    |
-|----------------|------|----------------------------|
-| Auth           | 8080 | Login, signup, JWT         |
-| ML recommender | 8000 | Projects, train, recommend |
-| Agent service (optional) | 8002 | Separate FastAPI mirror of `/agent/v1/*` |
-| Webhooks       | 3001 | Apps, API key, recommend   |
-| Frontend       | 5173 | React UI                   |
-| MLflow UI      | 5000 | Optional model registry    |
->>>>>>> eeaee68231966b50ed22a0a5f9bc2237ff728f60
+| Service | Port | Purpose |
+|---------|------|---------|
+| Kafka broker | 9092 | Event streaming (Docker) |
+| Auth | 8080 | Login, signup, JWT |
+| ML recommender | 8000 | Projects, train, recommend, emit events |
+| Agent service | 8002 | Optional agent layer API |
+| Webhooks | 3001 | Apps, API key, recommend, consume events |
+| Frontend | 5173 | React UI |
+| MLflow UI | 5000 | Optional model registry |
 
 ---
 
 ## Troubleshooting
 
-<<<<<<< HEAD
-- **CORS / connection errors:** Ensure Auth (8080), back2 (8000), and webhooks (3001) are running before using the frontend.- **"Kafka connection failed":** Ensure Kafka Docker container is running on port 9092. Check: `docker ps | grep kafka`. If not running, start it (see [Kafka setup](#kafka-setup-docker)).
-- **Events not persisted to database:** 
-  1. Verify Kafka is running: `docker ps`
-  2. Check backend logs for: `Emitted Kafka event for training completion (event_id=...)`
-  3. Check consumer logs for: `[consumer] Consumer has joined the group` and event processing (no DLQ errors)
-  4. Query database: `SELECT COUNT(*) FROM webhooks.event_logs WHERE event_type='training_completed'`
-- **Consumer won't start:** Ensure `.env` in `backend/webhooks_services/` has `KAFKA_BROKERS=localhost:9092` and `EVENT_LOGGING_ENABLED=true`.- **"Project not found" (404):** The `project_id` (e.g. in MovieRec’s `PROJECT` or in the recommend API) must exist in the ML backend. Create a project in the Dashboard, wait until status is **Ready**, then use that ID (or list IDs with `GET http://localhost:8000/projects/`).
-=======
-- **Training never finishes / stuck on “processing” (Recommender Studio or agent train):** Restart the ML API with `--reload-exclude "project_models"` (see Terminal 2 above). Without it, **auto-reload can kill the training task** when files appear under `backend/back2/project_models/`.
-- **`GET /agent/v1/context-options` returns 404:** There is no **READY** trained project for that domain for your user yet. Train a logistics/supply-chain preset from the Domain Agents tab (or upload matching data) until status is **ready**, then context options will load.
+- **Training never finishes / stuck on “processing” (Recommender Studio or agent train):** Restart the ML API with `--reload-exclude "project_models"` (see Terminal 2 above). Without it, auto-reload can kill the training task when files appear under `backend/back2/project_models/`.
+- **`GET /agent/v1/context-options` returns 404:** There is no READY trained project for that domain for your user yet. Train a logistics/supply-chain preset from the Domain Agents tab (or upload matching data) until status is ready, then context options will load.
 - **`GET /projects/` returns 401:** Log in again; the frontend token expired or `JWT_SECRET` mismatches between auth and back2.
 - **CORS / connection errors:** Ensure Auth (8080), back2 (8000), and webhooks (3001) are running before using the frontend.
-- **"Project not found" (404):** The `project_id` (e.g. in MovieRec’s `PROJECT` or in the recommend API) must exist in the ML backend. Create a project in the Dashboard, wait until status is **Ready**, then use that ID (or list IDs with `GET http://localhost:8000/projects/`).
->>>>>>> eeaee68231966b50ed22a0a5f9bc2237ff728f60
-- **"Project not found or not ready":** Wait until the project status is **Ready** after uploading data and training.
+- **Kafka connection failed:** Ensure Kafka Docker is running on port 9092. Check `docker ps` and, if needed, start the stack with `docker compose up kafka`.
+- **Events not persisted to database:** Verify Kafka is running, check the backend logs for `Emitted Kafka event for training completion`, check consumer logs for `[consumer] Consumer has joined the group`, and query `webhooks.event_logs` for the event.
+- **Consumer won't start:** Ensure `KAFKA_BROKERS` is set to `kafka:29092` inside the Docker stack, or `localhost:9092` when running locally.
+- **Project not found:** The `project_id` must exist in the ML backend. Create a project in the Dashboard, wait until status is Ready, then use that ID.
+- **Project not found or not ready:** Wait until the project status is Ready after uploading data and training.
 - **Database errors:** Run the schema script (see [One-time database setup](#one-time-database-setup-neon-or-single-postgresql)) and check `DATABASE_URL` (and `MLFLOW_TRACKING_URI` for back2) in each `.env`.
-- **Content model error ("not in index" / empty column):** Ensure the content file has **item_id**, **item_title**, and at least one **feature** column mapped to real CSV columns (no empty mappings).
-- **SuperAgent always returns the same list:** Use **exact feature column names** from your CSV (`mode=road`, not free text). Put several pairs on one line or comma-separated; the same **session** remembers prior constraints. Check the assistant line *“Constraints sent to the model”* — if it shows none, the model fell back to frequency ranking.
+- **Content model error ("not in index" / empty column):** Ensure the content file has `item_id`, `item_title`, and at least one feature column mapped to real CSV columns.
+- **SuperAgent always returns the same list:** Use exact feature column names from your CSV (`mode=road`, not free text). Put several pairs on one line or comma-separated; the same session remembers prior constraints.

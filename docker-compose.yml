@@ -1,0 +1,142 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: airec
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d airec"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:4.2.0
+    ports:
+      - "9093:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9093
+    restart: unless-stopped
+
+  auth:
+    build:
+      context: ./backend/auth
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/airec
+      JWT_SECRET: dev-jwt-secret
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  back2:
+    build:
+      context: ./backend/back2
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/airec
+      MLFLOW_TRACKING_URI: postgresql://postgres:postgres@db:5432/airec
+      JWT_SECRET: dev-jwt-secret
+      BACK2_INTERNAL_KEY: dev-internal-key
+      WEBHOOK_SERVICE_URL: http://webhooks:3001
+      KAFKA_BROKERS: kafka:29092
+      EVENT_LOGGING_ENABLED: "true"
+      USER_UPLOADS_DIR: /app/user_uploads
+      USER_UPLOADS_FALLBACK_DIRS: /app/user_uploads
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    volumes:
+      - back2-user-uploads:/app/user_uploads
+      - back2-project-models:/app/project_models
+      - back2-mlflow-artifacts:/app/mlflow_artifacts
+    depends_on:
+      - db
+      - kafka
+    restart: unless-stopped
+
+  webhooks:
+    build:
+      context: ./backend/webhooks_services
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/airec
+      BACK2_INTERNAL_KEY: dev-internal-key
+      FASTAPI_URL: http://back2:8000
+      BACK2_RETRAIN_URL: http://back2:8000
+      KAFKA_BROKERS: kafka:29092
+      EVENT_LOGGING_ENABLED: "true"
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+    depends_on:
+      - db
+      - kafka
+      - back2
+    restart: unless-stopped
+
+  webhooks-consumer:
+    build:
+      context: ./backend/webhooks_services
+    command: npm run start:consumer
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/airec
+      BACK2_INTERNAL_KEY: dev-internal-key
+      BACK2_RETRAIN_URL: http://back2:8000
+      KAFKA_BROKERS: kafka:29092
+      EVENT_LOGGING_ENABLED: "true"
+    depends_on:
+      - db
+      - kafka
+      - back2
+    restart: unless-stopped
+
+  agent-service:
+    build:
+      context: ./backend/agent_service
+    ports:
+      - "8002:8002"
+    environment:
+      BACK2_URL: http://back2:8000
+      BACK2_INTERNAL_KEY: dev-internal-key
+    depends_on:
+      - back2
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend/s
+      args:
+        VITE_AUTH_API_URL: http://localhost:8080
+        VITE_ML_API_URL: http://localhost:8000
+        VITE_API_BACKEND: http://localhost:8000
+        VITE_WEBHOOK_API_URL: http://localhost:3001
+    ports:
+      - "5173:80"
+    depends_on:
+      - auth
+      - back2
+      - webhooks
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  back2-user-uploads:
+  back2-project-models:
+  back2-mlflow-artifacts:
