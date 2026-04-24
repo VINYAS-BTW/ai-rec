@@ -27,24 +27,35 @@ def _normalize_ws(s: str) -> str:
 
 def _extract_kv_pairs(text: str) -> Dict[str, str]:
     """
-    Extract simple key=value pairs from free text.
+    Extract key=value style constraints from free text.
     Supports:
-      - key=value
-      - key: value
+      - key=value and key: value (optional spaces around = or :)
+      - comma / newline / semicolon separated chunks
+      - multiple pairs in one line, e.g. ``mode=road region=North`` (no commas)
     """
     out: Dict[str, str] = {}
     if not text:
         return out
-    for part in re.split(r"[\n,;]+", text):
+    t = text.strip()
+    # Pass 1: split on line / comma / semicolon
+    for part in re.split(r"[\n,;]+", t):
         part = part.strip()
         if not part:
             continue
-        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]+)\s*[:=]\s*(.+)$", part)
-        if not m:
-            continue
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.+)$", part)
+        if m:
+            k = m.group(1).strip()
+            v = m.group(2).strip().strip('"').strip("'")
+            if k and v:
+                out[k] = v
+    # Pass 2: all ``word=value`` tokens in the full string (handles space-separated pairs)
+    for m in re.finditer(
+        r"(?:^|[\s,;])([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(\S+)",
+        t,
+    ):
         k = m.group(1).strip()
         v = m.group(2).strip().strip('"').strip("'")
-        if k and v:
+        if k and v and v.lower() not in ("and", "or"):
             out[k] = v
     return out
 
@@ -137,10 +148,15 @@ class SuperAgent:
         explicit_domain: Optional[str],
         context: Dict[str, Any],
     ) -> Tuple[Optional[str], Dict[str, Any]]:
+        """
+        ``context`` should already include any session-persisted constraints; message
+        key=value pairs override keys present in ``context``.
+        """
         inferred = explicit_domain or infer_domain_from_text(message)
         merged: Dict[str, Any] = {}
         merged.update(context or {})
-        merged.update(_extract_kv_pairs(message))
+        msg_kv = _extract_kv_pairs(message)
+        merged.update(msg_kv)
         # normalize blanks
         merged = {k: v for k, v in merged.items() if v is not None and str(v).strip() != ""}
         return inferred, merged

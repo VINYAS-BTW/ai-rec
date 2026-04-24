@@ -5,6 +5,7 @@ sqlalchemy
 psycopg2-binary
 PyJWT
 pandas
+numpy
 scikit-learn
 mlflow
 scipy
@@ -13,3 +14,4 @@ aiofiles
 httpx
 fastapi-cors
 aiokafka
+faiss-cpu

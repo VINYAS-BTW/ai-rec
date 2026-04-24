@@ -6,6 +6,7 @@ class ContentBasedRecommender:
     """Recommends items similar to a given item based on its content."""
     def __init__(self):
         self.cosine_sim = None
+        self.tfidf_matrix = None  # sparse TF-IDF matrix; exposed for vector-store indexing
         self.indices = None
         self.df = None
         self.schema_map = {}
@@ -40,6 +41,7 @@ class ContentBasedRecommender:
         # max_features limits vocabulary size for large corpora and speeds up training
         tfidf = TfidfVectorizer(stop_words='english', max_features=10000, sublinear_tf=True)
         tfidf_matrix = tfidf.fit_transform(df['soup'])
+        self.tfidf_matrix = tfidf_matrix  # kept for downstream vector-store indexing
 
         # Calculate the cosine similarity between all items
         self.cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)

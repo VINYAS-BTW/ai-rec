@@ -230,7 +230,6 @@ function RecommenderPanel() {
   const [currentStatus, setCurrentStatus] = useState("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
-  const [itemsList, setItemsList] = useState([]);
   const [usersList, setUsersList] = useState([]);
   const [contextOptions, setContextOptions] = useState(null);
   const [contextSelections, setContextSelections] = useState({});
@@ -240,7 +239,6 @@ function RecommenderPanel() {
   const [selectedItemForSimilar, setSelectedItemForSimilar] = useState(""); // "recommend similar to this item" for parameter_driven / hybrid
   const [recommendations, setRecommendations] = useState(null);
   const [isLoadingRecs, setIsLoadingRecs] = useState(false);
-  const [loadingItems, setLoadingItems] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingContextOptions, setLoadingContextOptions] = useState(false);
   const [targetValuesData, setTargetValuesData] = useState(null); // { target_column, target_values } from /target-values for "similar to" dropdown
@@ -326,6 +324,7 @@ function RecommenderPanel() {
       );
       return () => clearInterval(interval);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- poll only when status + project id gate changes
   }, [currentStatus, selectedProjectId]);
 
   const checkProjectStatus = async (projectId) => {
@@ -441,7 +440,9 @@ function RecommenderPanel() {
         try {
           const err = await response.json();
           detail = err.detail || (typeof err === "string" ? err : detail);
-        } catch (_) {}
+        } catch {
+          /* non-JSON error body */
+        }
         throw new Error(detail);
       }
 
@@ -490,7 +491,6 @@ function RecommenderPanel() {
         setSelectedProjectId(null);
         setCurrentStatus(null);
         setRecommendations(null);
-        setItemsList([]);
         setUsersList([]);
         setTargetValuesData(null);
       }
@@ -508,7 +508,6 @@ function RecommenderPanel() {
     setCurrentStatus(project.status);
     setRecommendations(null);
     setErrorMessage("");
-    setItemsList([]);
     setUsersList([]);
     setSelectedItemTitle("");
     setSelectedUserId("");
@@ -521,7 +520,6 @@ function RecommenderPanel() {
     const needsUsers = project.model_type === "collaborative";
     const needsContextOptions = project.model_type === "parameter_driven" || project.model_type === "hybrid";
     const needsTargetValues = project.model_type === "content" || project.model_type === "parameter_driven" || project.model_type === "hybrid";
-    if (needsItems) setLoadingItems(true);
     if (needsUsers) setLoadingUsers(true);
     if (needsTargetValues) setLoadingTargetValues(true);
     if (needsContextOptions) {
@@ -586,19 +584,14 @@ function RecommenderPanel() {
             if (!stillForThisProject()) return;
             setErrorMessage("");
             const list = Array.isArray(data) ? data : [];
-            setItemsList(list);
             setSelectedItemTitle(list[0]?.title || "");
           })
           .catch((e) => {
-            if (stillForThisProject()) setItemsList([]);
             if (
               e.message &&
               !e.message.includes("Session expired")
             )
               console.error("Failed to fetch items", e);
-          })
-          .finally(() => {
-            if (stillForThisProject()) setLoadingItems(false);
           })
       : Promise.resolve();
 

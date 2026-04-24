@@ -31,6 +31,8 @@ import schemas
 import database
 import httpx
 from superagent import InMemorySessionStore, SuperAgent, infer_top_k_from_text
+from feature_store import FeatureStore
+from vector_store import ProjectVectorStore, get_vector_store, evict_vector_store, to_dense_for_index, FAISS_AVAILABLE
 # --- MLflow path-only URI fix: patch registry before mlflow is used so all callers get the wrapper ---
 _BACK2_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -456,13 +458,17 @@ async def superagent_chat(
     session_id = (req.session_id or "").strip() or _superagent_sessions.new_session()
     prev = _superagent_sessions.get(session_id)
     explicit_domain = req.target_domain or prev.get("target_domain")
+    # Persisted constraints from earlier turns + optional JSON body from client; message overrides keys.
+    base_ctx: Dict[str, Any] = {**(prev.get("context") or {}), **(req.context or {})}
 
-    target_domain, merged_context = _superagent.parse(req.message, explicit_domain, req.context)
+    target_domain, merged_context = _superagent.parse(req.message, explicit_domain, base_ctx)
     inferred_k = infer_top_k_from_text(req.message)
     n = int(inferred_k) if inferred_k and 1 <= int(inferred_k) <= 50 else int(req.n or 10)
     clarify = _superagent.need_clarification(target_domain)
     if clarify:
-        _superagent_sessions.upsert(session_id, {"last_user_message": req.message, "context": merged_context})
+        _superagent_sessions.upsert(
+            session_id, {"last_user_message": req.message, "context": merged_context}
+        )
         return SuperAgentChatResponse(
             session_id=session_id,
             status="clarify",
@@ -472,8 +478,8 @@ async def superagent_chat(
             results=None,
         )
 
-    # persist selection
-    _superagent_sessions.upsert(session_id, {"target_domain": target_domain, "context": merged_context})
+    # Persist domain; context is saved after we normalise (below) once we have a concrete project.
+    _superagent_sessions.upsert(session_id, {"target_domain": target_domain})
 
     # If user asked "best X" but provided no constraints, ask a follow-up instead of falling back
     # to "most frequent targets" (which looks like static/first rows).
@@ -512,6 +518,21 @@ async def superagent_chat(
             },
             results=None,
         )
+
+    picked_sa = _auto_pick_projects_for_domains(
+        db=db,
+        current_user_id=current_user_id,
+        domains=[str(target_domain)],
+    )
+    pid_sa = picked_sa.get(str(target_domain))
+    if pid_sa:
+        merged_context = normalize_context_to_project_columns(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=int(pid_sa),
+            context=merged_context,
+        )
+    _superagent_sessions.upsert(session_id, {"target_domain": str(target_domain), "context": merged_context})
 
     pred = await agent_single_recommend(
         req=AgentSingleRecommendRequest(
@@ -788,6 +809,14 @@ async def process_project(project_id: int, db: Session):
         model_type = db_project.model_type
         print(f"[Task {project_id}]: Building model of type: {model_type}")
 
+        # --- Placeholders for vector-store + feature-store materialisation ---
+        _vec_items_ids: List[Any] = []
+        _vec_items_mat = None
+        _vec_users_ids: List[Any] = []
+        _vec_users_mat = None
+        _fs_item_rows: List[Dict[str, Any]] = []
+        _fs_user_rows: List[Dict[str, Any]] = []
+
         # --- Artifacts will be saved here ---
         with tempfile.TemporaryDirectory() as tmpdir:
             artifacts = {}
@@ -821,6 +850,15 @@ async def process_project(project_id: int, db: Session):
                     pickle.dump(pd_recommender.column_transformer, f)
                 pd_recommender.df.to_csv(artifacts["pd_data"], index=False)
                 print(f"[Task {project_id}]: Saved Parameter-driven model artifacts.")
+                # Collect for vector-store + feature-store
+                _dense = to_dense_for_index(pd_recommender.feature_matrix_)
+                if _dense is not None:
+                    _vec_items_ids = pd_recommender.df[pd_recommender.target_col].astype(str).tolist()
+                    _vec_items_mat = _dense
+                for _, _row in pd_recommender.df.iterrows():
+                    _feat = {c: str(_row[c]) for c in pd_recommender.feature_cols if c in _row.index and str(_row.get(c, "")) not in ("", "nan", "None")}
+                    _feat["item_id"] = str(_row[pd_recommender.target_col])
+                    _fs_item_rows.append(_feat)
 
             # --- Train Content-Based Model (content-only; hybrid uses ParameterDriven) ---
             if model_type == models.ModelType.CONTENT:
@@ -838,6 +876,17 @@ async def process_project(project_id: int, db: Session):
                 with open(artifacts["cb_indices"], 'wb') as f: pickle.dump(cb_recommender.indices, f)
                 cb_recommender.df.to_csv(artifacts["cb_data"], index=False)
                 print(f"[Task {project_id}]: Saved Content model artifacts.")
+                # Collect for vector-store + feature-store
+                if cb_recommender.tfidf_matrix is not None:
+                    _dense = to_dense_for_index(cb_recommender.tfidf_matrix)
+                    if _dense is not None:
+                        _vec_items_ids = cb_recommender.df[content_schema["item_id"]].astype(str).tolist()
+                        _vec_items_mat = _dense
+                _feat_cols = content_schema.get("feature_cols") or []
+                for _, _row in cb_recommender.df.iterrows():
+                    _feat = {c: str(_row[c]) for c in _feat_cols if c in _row.index and str(_row.get(c, "")) not in ("", "nan", "None")}
+                    _feat["item_id"] = str(_row[content_schema["item_id"]])
+                    _fs_item_rows.append(_feat)
 
             # --- Train Hybrid: join Dataset1 (content) + Dataset2 (ratings) on common key, then ParameterDriven ---
             # Hybrid = recommendations by selected features from dataset 1 + selected rating from dataset 2.
@@ -891,6 +940,15 @@ async def process_project(project_id: int, db: Session):
                 artifacts["cb_data"] = os.path.join(tmpdir, "cb_data.csv")
                 df_joined.to_csv(artifacts["cb_data"], index=False)
                 print(f"[Task {project_id}]: Saved Hybrid (joined content+ratings, ParameterDriven) artifacts.")
+                # Collect for vector-store + feature-store
+                _dense = to_dense_for_index(pd_recommender.feature_matrix_)
+                if _dense is not None:
+                    _vec_items_ids = pd_recommender.df[pd_recommender.target_col].astype(str).tolist()
+                    _vec_items_mat = _dense
+                for _, _row in pd_recommender.df.iterrows():
+                    _feat = {c: str(_row[c]) for c in pd_recommender.feature_cols if c in _row.index and str(_row.get(c, "")) not in ("", "nan", "None")}
+                    _feat["item_id"] = str(_row[pd_recommender.target_col])
+                    _fs_item_rows.append(_feat)
 
             # --- Train Collaborative Filtering Model ---
             if model_type == models.ModelType.COLLABORATIVE:
@@ -913,6 +971,13 @@ async def process_project(project_id: int, db: Session):
                 with open(artifacts["cf_user_ids"], 'wb') as f: pickle.dump(cf_recommender.user_ids, f)
                 with open(artifacts["cf_pivot"], 'wb') as f: pickle.dump(cf_recommender.original_ratings_pivot, f)
                 print(f"[Task {project_id}]: Saved Collaborative model artifacts.")
+                # Collect for vector-store + feature-store
+                _vec_users_ids = [str(u) for u in cf_recommender.user_ids.tolist()]
+                _vec_users_mat = cf_recommender.user_features.astype("float32")
+                _vec_items_ids = [str(i) for i in cf_recommender.item_ids.tolist()]
+                _vec_items_mat = cf_recommender.item_features.T.astype("float32")
+                for _uid, _mean in cf_recommender.user_means.items():
+                    _fs_user_rows.append({"user_id": str(_uid), "mean_rating": float(_mean)})
 
             # --- Save content data for pure collaborative model (for lookups) ---
             if model_type == models.ModelType.COLLABORATIVE and df_content is not None:
@@ -941,6 +1006,33 @@ async def process_project(project_id: int, db: Session):
                 code_paths=_code_paths,
             )
             print(f"[Task {project_id}]: Model saved to {saved_model_path}")
+
+            # --- Build Vector Store indexes ---
+            try:
+                evict_vector_store(project_id)
+                vec_index_dir = os.path.join(saved_model_path, "vector_index")
+                vstore = ProjectVectorStore(vec_index_dir)
+                if _vec_items_ids and _vec_items_mat is not None:
+                    ok = vstore.build_items_index(_vec_items_ids, _vec_items_mat)
+                    print(f"[Task {project_id}]: Vector store items index built ({len(_vec_items_ids)} items). ok={ok}")
+                if _vec_users_ids and _vec_users_mat is not None:
+                    ok = vstore.build_users_index(_vec_users_ids, _vec_users_mat)
+                    print(f"[Task {project_id}]: Vector store users index built ({len(_vec_users_ids)} users). ok={ok}")
+            except Exception as _ve:
+                print(f"[Task {project_id}]: Vector store build error (non-fatal): {_ve}")
+
+            # --- Materialise Feature Store (delete first so bulk insert is idempotent) ---
+            try:
+                if _fs_item_rows or _fs_user_rows:
+                    FeatureStore.delete_project_features(db, project_id)
+                if _fs_item_rows:
+                    _written = FeatureStore.bulk_upsert_item_features(db, project_id, _fs_item_rows)
+                    print(f"[Task {project_id}]: Feature store materialised {_written} item rows.")
+                if _fs_user_rows:
+                    _written = FeatureStore.bulk_upsert_user_features(db, project_id, _fs_user_rows)
+                    print(f"[Task {project_id}]: Feature store materialised {_written} user rows.")
+            except Exception as _fe:
+                print(f"[Task {project_id}]: Feature store materialisation error (non-fatal): {_fe}")
 
         # --- Update Project in DB ---
         db_project.mlflow_model_name = model_name
@@ -1120,7 +1212,150 @@ def delete_project(
                 pass
     db.delete(db_project)
     db.commit()
+    evict_vector_store(project_id)
+    try:
+        FeatureStore.delete_project_features(db, project_id)
+    except Exception:
+        pass
     return {"message": "Project deleted."}
+
+
+# =============================================================================
+# Vector Store endpoints
+# =============================================================================
+
+@app.get("/project/{project_id}/vector-store/status")
+def vector_store_status(
+    project_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Return index statistics for a project's vector store."""
+    get_project_for_user(project_id, current_user_id, db)
+    vstore = get_vector_store(project_id, PROJECT_MODELS_DIR)
+    return vstore.status()
+
+
+@app.get("/project/{project_id}/vector-store/similar-items")
+def vector_store_similar_items(
+    project_id: int,
+    item_id: str,
+    n: int = 10,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Return the top-n items whose embeddings are most similar to *item_id*.
+    Uses the FAISS index built at training time.
+    """
+    get_project_for_user(project_id, current_user_id, db)
+    if not FAISS_AVAILABLE:
+        raise HTTPException(status_code=501, detail="faiss-cpu is not installed. Run: pip install faiss-cpu")
+    vstore = get_vector_store(project_id, PROJECT_MODELS_DIR)
+    results = vstore.search_similar_items(item_id, k=max(1, min(n, 100)))
+    return {"project_id": project_id, "item_id": item_id, "similar_items": results}
+
+
+@app.get("/project/{project_id}/vector-store/similar-users")
+def vector_store_similar_users(
+    project_id: int,
+    user_id: str,
+    n: int = 10,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Return the top-n users whose embeddings are most similar to *user_id*.
+    Only available for collaborative / hybrid projects.
+    """
+    get_project_for_user(project_id, current_user_id, db)
+    if not FAISS_AVAILABLE:
+        raise HTTPException(status_code=501, detail="faiss-cpu is not installed. Run: pip install faiss-cpu")
+    vstore = get_vector_store(project_id, PROJECT_MODELS_DIR)
+    results = vstore.search_similar_users(user_id, k=max(1, min(n, 100)))
+    return {"project_id": project_id, "user_id": user_id, "similar_users": results}
+
+
+# =============================================================================
+# Feature Store endpoints
+# =============================================================================
+
+@app.get("/project/{project_id}/feature-store/items")
+def feature_store_list_items(
+    project_id: int,
+    limit: int = 100,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """List item feature rows materialised for this project (capped at *limit*)."""
+    get_project_for_user(project_id, current_user_id, db)
+    rows = FeatureStore.list_item_features(db, project_id, limit=max(1, min(limit, 2000)))
+    return {"project_id": project_id, "count": len(rows), "items": rows}
+
+
+@app.get("/project/{project_id}/feature-store/users")
+def feature_store_list_users(
+    project_id: int,
+    limit: int = 100,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """List user feature rows materialised for this project (capped at *limit*)."""
+    get_project_for_user(project_id, current_user_id, db)
+    rows = FeatureStore.list_user_features(db, project_id, limit=max(1, min(limit, 2000)))
+    return {"project_id": project_id, "count": len(rows), "users": rows}
+
+
+@app.get("/project/{project_id}/feature-store/item/{item_id}")
+def feature_store_get_item(
+    project_id: int,
+    item_id: str,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Return the stored feature bag for a single item."""
+    get_project_for_user(project_id, current_user_id, db)
+    feats = FeatureStore.get_item_features(db, project_id, item_id)
+    if feats is None:
+        raise HTTPException(status_code=404, detail=f"No features found for item '{item_id}' in project {project_id}.")
+    return {"project_id": project_id, "item_id": item_id, "features": feats}
+
+
+@app.get("/project/{project_id}/feature-store/user/{user_id}")
+def feature_store_get_user(
+    project_id: int,
+    user_id: str,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Return the stored feature bag for a single user."""
+    get_project_for_user(project_id, current_user_id, db)
+    feats = FeatureStore.get_user_features(db, project_id, user_id)
+    if feats is None:
+        raise HTTPException(status_code=404, detail=f"No features found for user '{user_id}' in project {project_id}.")
+    return {"project_id": project_id, "user_id": user_id, "features": feats}
+
+
+class UserFeaturesUpdateRequest(BaseModel):
+    features: Dict[str, Any]
+
+
+@app.post("/project/{project_id}/feature-store/user/{user_id}")
+def feature_store_update_user(
+    project_id: int,
+    user_id: str,
+    body: UserFeaturesUpdateRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Upsert a user's feature bag.  Use this as a lightweight feedback-loop hook:
+    after a click/rating event, push updated signals (e.g. avg_rating, last_category)
+    so the next recommendation call can read fresh user context.
+    """
+    get_project_for_user(project_id, current_user_id, db)
+    FeatureStore.upsert_user_features(db, project_id, user_id, body.features)
+    return {"project_id": project_id, "user_id": user_id, "status": "updated"}
 
 
 def get_project_data(project_id: int, user_id: int, db: Session, file_type: models.FileType):
@@ -1346,6 +1581,43 @@ def get_project_context_options(
     if _resolved_col:
         target_col = _resolved_col
     return schemas.ContextOptionsResponse(target_column=target_col, feature_columns=feature_columns, target_values=target_values)
+
+
+def normalize_context_to_project_columns(
+    *,
+    db: Session,
+    current_user_id: int,
+    project_id: int,
+    context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Map client context keys onto the project's real feature column names (case-insensitive)
+    and drop unknown keys so the sklearn encoder does not see stray DataFrame columns.
+    """
+    raw = dict(context or {})
+    db_project = get_project_for_user(project_id, current_user_id, db)
+    if db_project.model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
+        return raw
+    try:
+        opts = get_project_context_options(project_id=project_id, current_user_id=current_user_id, db=db)
+    except Exception:
+        return raw
+    names = [fc.name for fc in (opts.feature_columns or []) if fc and getattr(fc, "name", None)]
+    if not names:
+        return raw
+    lower_map = {str(n).lower(): n for n in names}
+    reserved = {"user_id", "item_title", "n", "target_domain"}
+    out: Dict[str, Any] = {}
+    for k, v in raw.items():
+        kk = str(k).strip()
+        if not kk or kk.lower() in reserved:
+            continue
+        if v is None or str(v).strip() == "":
+            continue
+        canon = lower_map.get(kk.lower())
+        if canon is not None:
+            out[canon] = v
+    return out
 
 
 @app.get("/project/{project_id}/recommendations", response_model=schemas.RecommendationResponse)
@@ -1719,11 +1991,17 @@ async def agent_domain_recommend(
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
+    normalized_ctx = normalize_context_to_project_columns(
+        db=db,
+        current_user_id=current_user_id,
+        project_id=int(req.project_id),
+        context=req.context,
+    )
     pred = await _predict_project(
         db=db,
         current_user_id=current_user_id,
         project_id=req.project_id,
-        context=req.context,
+        context=normalized_ctx,
         item_title=req.item_title,
         user_id=req.user_id,
         n=req.n,
@@ -1811,6 +2089,12 @@ async def agent_orchestrate(
         feature_context = dict(req.context or {})
         feature_context.pop("item_title", None)
         feature_context.pop("user_id", None)
+        feature_context = normalize_context_to_project_columns(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=int(project_id),
+            context=feature_context,
+        )
 
         pred = await _predict_project(
             db=db,
@@ -1879,12 +2163,18 @@ async def agent_single_recommend(
         if domain_key not in project_id_map:
             continue
         project_id = project_id_map[domain_key]
+        normalized_ctx = normalize_context_to_project_columns(
+            db=db,
+            current_user_id=current_user_id,
+            project_id=int(project_id),
+            context=req.context,
+        )
 
         pred = await _predict_project(
             db=db,
             current_user_id=current_user_id,
             project_id=project_id,
-            context=req.context,
+            context=normalized_ctx,
             item_title=req.item_title,
             user_id=req.user_id,
             n=req.n,
