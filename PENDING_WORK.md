@@ -1,125 +1,109 @@
 # Pending Work
 
-This file tracks the major items still pending compared to the target SuperAgent architecture in `docs/superagent.pdf`.
+This file tracks pending and completed work against the target SuperAgent architecture in `docs/superagent.pdf`.
 
-## Completed ✅
+## Status Key
 
-- **Build event-driven backbone: Kafka/event bus** ✅ Implemented:
-  - Apache Kafka Docker broker running on localhost:9092
-  - Producer: async emit_event() in FastAPI backend (backend/back2/kafka/producer.py)
-  - Consumer: Kafka consumer in Node.js persisting to PostgreSQL (backend/webhooks_services/workers/eventConsumer.js)
-  - Event types: click, rating, skip, dwell, recommendation_served, **training_completed** (newly added)
-  - Topics: rec.events.v1 (events), rec.events.dlq.v1 (dead-letter queue)
-  - End-to-end validation: events successfully flow from backend → Kafka → consumer → PostgreSQL
-  - See KAFKA_SETUP.md and TEAM_SETUP.md for detailed setup
+- `[x]` Completed and in active use
+- `[~]` Implemented in code, partially enabled, or runtime-dependent
+- `[ ]` Pending
+- `[c]` Cancelled or intentionally deferred for current scope
 
-- **Add schema governance: schema registry + compatibility checks before publishing events** ✅ Implemented:
-  - Docker service: Confluent Schema Registry on `http://localhost:8081`
-  - Subject compatibility policy: `BACKWARD` (configurable via env)
-  - Producers now register/check JSON schema under subject `rec.events.v1-value` before publishing
-  - Producers attach schema metadata headers (`schema-id`, `schema-subject`, `schema-version`) on events
+## Completed / Delivered
 
-- **Implement stream processor + online feature updater for near-real-time signals** ✅ Implemented:
-  - Upgraded Kafka worker to real-time processor mode (`realtime-v2`) with batch-aware consumption
-  - Controlled partition concurrency via `KAFKA_PARTITIONS_CONSUMED_CONCURRENTLY`
-  - Low-latency commit strategy with heartbeat-safe processing and lag threshold alerts
-  - Continues to update online feature rollups and retrain triggers from live events
+- `[x]` Event-driven backbone (Kafka producer + consumer + PostgreSQL sink)
+- `[x]` Stream processor mode in webhooks consumer (`realtime-v2`)
+- `[x]` Model lifecycle controls (champion/challenger, promote/retire flows)
+- `[x]` Shadow serving and serving latency controls
+- `[x]` Feature store tables and feature APIs (online/offline patterns in current build)
+- `[x]` Vector similarity support via FAISS for items/users
+- `[x]` Request validation using Zod on key auth and webhook routes
+- `[x]` Route-level rate limiting on auth and webhook-sensitive endpoints
+- `[x]` Redis-backed caching for recommendation proxy path
 
-- **Formalize model registry/service lifecycle (champion/challenger, promotion/retire flow)** ✅ Implemented:
-  - Added persistent model registry table with per-project version history and lifecycle roles
-  - New training snapshots now register as champion (first model) or challenger (subsequent models)
-  - Added promote endpoint to switch champion and retire previous champion
-  - Added retire endpoint for non-champion versions
+## Implemented but Runtime-Dependent
 
-- **Add model serving controls such as shadow traffic and latency monitoring** ✅ Implemented:
-  - Added per-project serving controls (`shadow_enabled`, `shadow_percentage`, `latency_warn_ms`)
-  - Inference now serves champion path with optional shadow challenger execution
-  - Captures champion/challenger latency and shadow error/request counters
-  - Added serving controls and serving metrics endpoints
+- `[~]` Schema governance with Schema Registry compatibility checks
+  - Code path exists and was previously configured.
+  - Current local Docker runtime intentionally runs without Schema Registry container.
+  - Keep as runtime-optional unless strict schema governance is required in deployment.
 
-- **Introduce a dedicated feature store service (online + offline feature access patterns)** ✅ Implemented:
-  - Postgres-backed feature store with `user_features` and `item_features`
-  - Training-time bulk materialization and online upserts for live feedback loops
-  - Read APIs for single-entity lookup and admin/debug listings
+## High Priority Pending
 
-- **Add vector DB for embeddings/similarity search (users/items)** ✅ Implemented:
-  - Per-project FAISS vector store for items and users
-  - Training-time index build and persisted indexes next to the model artifacts
-  - Read APIs for similar items/users and vector-store status
-
-## High Priority
-
-- Implement resilience controls: retry policy, circuit breaker, timeout, fallback.
-- Add persistent session management for SuperAgent (replace in-memory session store).
-- Implement cache service for frequently requested recommendations/context options.
+- `[ ]` Resilience controls: retry policy, circuit breaker, timeout, fallback strategy.
+- `[ ]` Persistent SuperAgent session management (replace in-memory/session-local behavior).
+- `[ ]` Unified cache strategy for frequently requested recommendation/context option endpoints.
 
 ## SuperAgent Architecture Gaps
 
-- Formalize the `IAgent` and `IMediator` contracts across the Python and Node services so agents are plug-and-play.
-- Add an explicit agent registry for dynamic `resolveAgent(domain)` lookup instead of hard-coded domain dispatch.
-- Implement mediator routing and broadcast flows for fan-out to multiple agents and response coordination.
-- Add a recommendation aggregation layer that merges and ranks results from multiple agents consistently.
-- Define federated data access hooks (`fetchData`, `getUserProfile`) with access checks and shared context propagation.
-- Add explicit feedback submission flow from client/UI into the mediator and feedback loop.
-- Add runtime observability hooks for latency monitoring, per-agent health, and pod/service monitoring.
+- `[ ]` Formalize `IAgent` and `IMediator` contracts across Python and Node boundaries.
+- `[ ]` Add dynamic agent registry for `resolveAgent(domain)` to remove hard-coded dispatch.
+- `[ ]` Implement mediator fan-out and coordinated multi-agent response flows.
+- `[ ]` Add recommendation aggregation layer for cross-agent merge/rank policies.
+- `[ ]` Define federated data hooks (`fetchData`, `getUserProfile`) with shared access controls.
+- `[ ]` Add explicit feedback submission flow from UI/client through mediator.
+- `[ ]` Add per-agent runtime health and latency observability hooks.
 
-## Data & ML Platform
+## Data and ML Platform
 
-- Add data lake and warehouse pipelines for raw + aggregated analytics data.
+- `[ ]` Add data lake / warehouse pipelines for raw and aggregated analytics.
+- `[ ]` Harden ETL-based retrain trigger controls and observability thresholds.
 
-### Feedback Loop Gaps Still to Close
+### Feedback Loop Items
 
-- Online feature updater for user/item embeddings from fresh Kafka events.
-- Feedback producer hardening for richer negative/implicit signals (skip + dwell) at every relevant UI/API touchpoint.
-- ETL retrain trigger hardening and observability so retraining fires only after enough fresh feedback accumulates.
+- `[ ]` Improve online feature updater for user/item embeddings from fresh events.
+- `[ ]` Harden negative/implicit feedback production coverage across all UX/API touchpoints.
+- `[ ]` Tighten automated retraining trigger quality gates based on sufficient fresh feedback.
 
-## Agent & Recommendation Intelligence
+## Agent and Recommendation Intelligence
 
-- Add business rule engine for policy/compliance/content filtering and promotion rules.
-- Add explainability service (reason codes, feature contribution summaries).
-- Expand SuperAgent orchestration for stronger multi-agent planning/aggregation logic.
-- Strengthen feedback loop to support automated retraining triggers from behavior signals.
+- `[ ]` Add business rule engine (policy, compliance, filtering, promotion controls).
+- `[ ]` Add explainability service (reason codes, contribution summaries).
+- `[ ]` Expand SuperAgent orchestration depth for multi-agent planning.
+- `[ ]` Strengthen feedback-to-training automation loop.
 
-## Security & Platform Edge
+## Security and Platform Edge
 
-- Add API gateway layer (request validation, rate limiting, versioning, routing).
-- Add IAM/RBAC service beyond JWT validation for role-based controls.
-- Add guardrails service for PII scrubbing, output validation, and safety filtering.
+- `[~]` API gateway controls
+  - Request validation and rate limiting are now implemented at service level.
+  - Dedicated gateway tier (central routing/versioning/policies) remains pending.
+- `[ ]` Add IAM/RBAC layer beyond JWT-based identity.
+- `[ ]` Add safety/guardrails service for PII scrubbing and output validation.
 
-## Experimentation, Observability, and Ops
+## Experimentation, Observability, and Operations
 
-- Add experiment service (A/B assignment, variant tracking, comparison).
-- Extend admin dashboard with system metrics, model metrics, and operational logs.
-- Add CI/CD automation for model training/testing/deployment lifecycle.
-- Add container registry + deployment controller (canary/blue-green/rollback).
-- Add Kubernetes orchestration features (autoscaling, self-healing, service discovery).
-- Add disaster recovery manager (multi-region failover, backup/restore, RPO/RTO controls).
+- `[ ]` Add experimentation service (A/B assignment, variant evaluation).
+- `[ ]` Extend admin dashboard with full system/model operational metrics.
+- `[ ]` Add CI/CD automation for training/testing/deployment lifecycle.
+- `[ ]` Add container registry and deployment controller (canary/blue-green/rollback).
+- `[ ]` Add Kubernetes orchestration capabilities (autoscaling, self-healing, service discovery).
+- `[ ]` Add disaster recovery controls (backup/restore, multi-region failover).
 
-## Suggested Milestones
+## Milestone View (Updated)
 
 ### Milestone 1: Production MVP Hardening
 
-- Persistent sessions
-- Resilience manager
-- Cache service
-- Basic API gateway policies
-- Expanded monitoring and logs
+- `[ ]` Persistent sessions
+- `[ ]` Resilience manager
+- `[x]` Cache service (Redis-based recommendation caching)
+- `[~]` Basic API gateway policies (partially covered by service-level validation + rate limits)
+- `[ ]` Expanded monitoring and logs
 
 ### Milestone 2: Event-Driven Feedback Loop
 
-- Kafka/event streaming
-- Schema registry
-- Stream processor
-- Online feature updater
+- `[x]` Kafka/event streaming
+- `[~]` Schema registry (implemented path, runtime optional)
+- `[x]` Stream processor
+- `[ ]` Online feature updater maturity
 
 ### Milestone 3: Advanced ML Platform
 
-- Model registry/service lifecycle hardening
-- Explainability + business rules
-- Experiment service
+- `[x]` Model registry/service lifecycle controls
+- `[ ]` Explainability + business rules
+- `[ ]` Experiment service
 
-### Milestone 4: Infra Maturity
+### Milestone 4: Infrastructure Maturity
 
-- CI/CD + deployment controller
-- Kubernetes scaling/health automation
-- Disaster recovery + multi-region readiness
+- `[ ]` CI/CD + deployment controller
+- `[ ]` Kubernetes scaling/health automation
+- `[ ]` Disaster recovery + multi-region readiness

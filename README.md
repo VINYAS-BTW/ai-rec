@@ -63,6 +63,67 @@ ai-rec/
 6. External apps request recommendations through `/api/recommend`.
 7. Webhooks service validates API key, optionally serves cache, calls ML backend, tracks usage, emits events, and pushes outbound webhook payloads.
 
+## Architecture Deep Dive
+
+### Service Interaction Model
+
+- `frontend/s` is the primary operator interface and calls Auth, ML backend, and Webhooks APIs.
+- `backend/auth` is the identity boundary for dashboard users and issues JWT tokens.
+- `backend/back2` is the model lifecycle engine and inference runtime.
+- `backend/webhooks_services` is the external edge for API-key clients and also a proxy to ML inference endpoints.
+- `backend/webhooks_services/workers/eventConsumer.js` consumes Kafka events and persists stream-derived records to PostgreSQL.
+
+### Request and Data Flow
+
+#### Dashboard Recommendation Flow
+
+1. User logs in through Auth and receives JWT.
+2. Frontend sends authenticated requests to ML backend.
+3. ML backend retrieves project metadata, validates readiness, and loads the registered model.
+4. Inference is executed against request context (`item_title`, `user_id`, `n`).
+5. Results are returned to frontend for rendering.
+
+#### External API Recommendation Flow
+
+1. External app calls `POST /api/recommend` with `x-api-key`.
+2. Webhooks service validates API key against `webhooks.apps`.
+3. Request body is validated via Zod.
+4. Recommendation payload may be served from Redis cache if key exists.
+5. On cache miss, Webhooks service calls ML backend and stores response in cache.
+6. Usage counters are updated in PostgreSQL and event emission is triggered.
+7. Optional downstream webhook callback is sent to the registered client URL.
+
+### Data Layer Design
+
+- Single PostgreSQL instance with logical separation by schema:
+  - `auth`: user identity and credentials metadata
+  - `webhooks`: external applications, usage counters, stream/event-related tables
+  - `recommender`: project metadata, uploaded file references, schema mappings, model-serving metadata
+- Auth and Webhooks use Drizzle ORM.
+- ML backend uses SQLAlchemy and MLflow model references.
+
+### Eventing Architecture
+
+- Kafka is used as asynchronous transport for recommendation and feedback events.
+- Producer emission points exist in online request paths (for example recommendation served events).
+- Consumer processes events continuously and stores materialized records in PostgreSQL for analytics and downstream workflows.
+- Schema governance code paths exist in the codebase; current local runtime is configured without a Schema Registry container.
+
+### Caching and Performance
+
+- Redis is used by Webhooks recommendation route to reduce repeated inference calls for identical context.
+- Cached responses reduce ML backend pressure and improve latency for repeated client requests.
+- Rate limiters are applied at service entry points to reduce abuse and stabilize service performance.
+
+### Security Controls in Current Build
+
+- Password hashing via bcrypt.
+- JWT-based session model for dashboard users.
+- API-key access model for external integration endpoints.
+- Zod request validation on key auth and webhook request bodies.
+- Route-level rate limiting on high-risk or high-volume endpoints.
+- CORS allowlist controls in service configuration.
+
 ## User Workflow (End-to-End)
 
 ### 1) Access and Authentication
