@@ -50,3 +50,19 @@ class RecommenderClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def update_user_features(
+        self,
+        *,
+        project_id: int,
+        user_id: str,
+        features: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        url = f"{self.back2_url}/project/{int(project_id)}/feature-store/user/{urllib.parse.quote(str(user_id), safe='')}"
+        headers: Dict[str, str] = {}
+        if self.back2_internal_key:
+            headers["X-Internal-Key"] = self.back2_internal_key
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json={"features": features or {}}, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+

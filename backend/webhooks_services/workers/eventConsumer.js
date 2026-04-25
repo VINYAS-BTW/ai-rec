@@ -20,6 +20,10 @@ const ETL_RETRAIN_ENABLED = process.env.ETL_RETRAIN_ENABLED !== "false";
 const ETL_RETRAIN_THRESHOLD = parseInt(process.env.ETL_RETRAIN_THRESHOLD || "50", 10);
 const ETL_RETRAIN_WINDOW_MINUTES = parseInt(process.env.ETL_RETRAIN_WINDOW_MINUTES || "60", 10);
 const ETL_RETRAIN_COOLDOWN_MINUTES = parseInt(process.env.ETL_RETRAIN_COOLDOWN_MINUTES || "180", 10);
+const ETL_RETRAIN_MIN_RATINGS = parseInt(process.env.ETL_RETRAIN_MIN_RATINGS || "5", 10);
+const ETL_RETRAIN_MIN_UNIQUE_USERS = parseInt(process.env.ETL_RETRAIN_MIN_UNIQUE_USERS || "5", 10);
+const ETL_RETRAIN_MIN_NEGATIVE_FEEDBACK = parseInt(process.env.ETL_RETRAIN_MIN_NEGATIVE_FEEDBACK || "3", 10);
+const ETL_RETRAIN_MAX_AVG_RATING = Number(process.env.ETL_RETRAIN_MAX_AVG_RATING || "4.7");
 const BACK2_RETRAIN_URL = (process.env.BACK2_RETRAIN_URL || "http://localhost:8000").replace(/\/$/, "");
 const BACK2_INTERNAL_KEY = process.env.BACK2_INTERNAL_KEY || "";
 const STREAM_PROCESSOR_MODE = process.env.STREAM_PROCESSOR_MODE || "realtime-v2";
@@ -261,7 +265,36 @@ async function maybeTriggerRetrain(client, event) {
     feedbackCount = isWindowExpired ? 1 : Number(state.feedback_count || 0) + 1;
   }
 
-  const shouldTrigger = feedbackCount >= ETL_RETRAIN_THRESHOLD;
+  const windowStartTs = windowStartValue.toISOString();
+  const qualityGateRes = await client.query(
+    `
+      SELECT
+        COUNT(*)::int AS feedback_events,
+        COUNT(DISTINCT user_id)::int AS unique_users,
+        COUNT(*) FILTER (WHERE event_type = 'rating')::int AS rating_events,
+        COUNT(*) FILTER (WHERE event_type IN ('skip'))::int AS negative_events,
+        AVG(rating_value)::numeric AS avg_rating
+      FROM webhooks.event_logs
+      WHERE project_id = $1
+        AND occurred_at >= $2::timestamptz
+        AND event_type IN ('click', 'rating', 'skip', 'dwell');
+    `,
+    [event.project_id, windowStartTs],
+  );
+  const gates = qualityGateRes.rows[0] || {};
+  const gateFeedbackEvents = Number(gates.feedback_events || 0);
+  const gateUniqueUsers = Number(gates.unique_users || 0);
+  const gateRatings = Number(gates.rating_events || 0);
+  const gateNegative = Number(gates.negative_events || 0);
+  const gateAvgRating = gates.avg_rating == null ? null : Number(gates.avg_rating);
+  const qualityGatePass =
+    gateFeedbackEvents >= ETL_RETRAIN_THRESHOLD &&
+    gateUniqueUsers >= ETL_RETRAIN_MIN_UNIQUE_USERS &&
+    gateRatings >= ETL_RETRAIN_MIN_RATINGS &&
+    gateNegative >= ETL_RETRAIN_MIN_NEGATIVE_FEEDBACK &&
+    (gateAvgRating == null || gateAvgRating <= ETL_RETRAIN_MAX_AVG_RATING);
+
+  const shouldTrigger = feedbackCount >= ETL_RETRAIN_THRESHOLD && qualityGatePass;
   const nextCooldownUntil = shouldTrigger ? new Date(now.getTime() + ETL_RETRAIN_COOLDOWN_MINUTES * 60 * 1000) : cooldownUntil;
 
   await client.query(
@@ -285,6 +318,30 @@ async function maybeTriggerRetrain(client, event) {
       shouldTrigger ? nextCooldownUntil : nextCooldownUntil,
       shouldTrigger ? Number(state?.trigger_count || 0) + 1 : Number(state?.trigger_count || 0),
       now,
+    ],
+  );
+
+  await client.query(
+    `
+      INSERT INTO webhooks.retrain_audit (
+        project_id, evaluated_at, window_started_at, feedback_count_in_state,
+        gate_feedback_events, gate_unique_users, gate_rating_events, gate_negative_events, gate_avg_rating,
+        quality_gate_pass, threshold_pass, triggered
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);
+    `,
+    [
+      event.project_id,
+      now,
+      windowStartValue,
+      feedbackCount,
+      gateFeedbackEvents,
+      gateUniqueUsers,
+      gateRatings,
+      gateNegative,
+      gateAvgRating,
+      qualityGatePass,
+      feedbackCount >= ETL_RETRAIN_THRESHOLD,
+      shouldTrigger,
     ],
   );
 

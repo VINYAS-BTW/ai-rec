@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import time
 
 from agents.contracts import AgentContext, AgentResponse, IAgent
 from services.recommender_client import RecommenderClient
 from services.registry_loader import AttributesRegistry
+from services.observability import AgentObservability
 
 
 class DomainAgent(IAgent):
@@ -14,31 +16,43 @@ class DomainAgent(IAgent):
     - Calls your recommender backend (back2) for the project's recommendations
     """
 
-    def __init__(self, *, client: RecommenderClient, attributes_registry: AttributesRegistry):
+    def __init__(self, *, client: RecommenderClient, attributes_registry: AttributesRegistry, observability: Optional[AgentObservability] = None):
         self.client = client
         self.attributes_registry = attributes_registry
+        self.observability = observability
 
     def can_handle(self, context: AgentContext) -> bool:
         return bool(context.domain_slug and context.project_id > 0)
 
     async def handle(self, context: AgentContext) -> AgentResponse:
-        result = await self.recommend(
-            domain_slug=context.domain_slug,
-            project_id=context.project_id,
-            context=context.context,
-            item_title=context.item_title,
-            user_id=context.user_id,
-            n=context.n,
-        )
-        return AgentResponse(
-            agent=result["domain_slug"],
-            data=result.get("recommendations") or [],
-            confidence=0.87,
-            meta={
-                "project_id": result["project_id"],
-                "used_context": result.get("used_context") or {},
-            },
-        )
+        started = time.perf_counter()
+        try:
+            result = await self.recommend(
+                domain_slug=context.domain_slug,
+                project_id=context.project_id,
+                context=context.context,
+                item_title=context.item_title,
+                user_id=context.user_id,
+                n=context.n,
+            )
+            latency_ms = (time.perf_counter() - started) * 1000.0
+            if self.observability:
+                self.observability.record_success(context.domain_slug, latency_ms)
+            return AgentResponse(
+                agent=result["domain_slug"],
+                data=result.get("recommendations") or [],
+                confidence=0.87,
+                meta={
+                    "project_id": result["project_id"],
+                    "used_context": result.get("used_context") or {},
+                    "latency_ms": latency_ms,
+                },
+            )
+        except Exception as exc:
+            latency_ms = (time.perf_counter() - started) * 1000.0
+            if self.observability:
+                self.observability.record_error(context.domain_slug, latency_ms, str(exc))
+            raise
 
     async def recommend(
         self,

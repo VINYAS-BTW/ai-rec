@@ -36,24 +36,24 @@ This file tracks pending and completed work against the target SuperAgent archit
 
 ## SuperAgent Architecture Gaps
 
-- `[ ]` Formalize `IAgent` and `IMediator` contracts across Python and Node boundaries.
-- `[ ]` Add dynamic agent registry for `resolveAgent(domain)` to remove hard-coded dispatch.
-- `[ ]` Implement mediator fan-out and coordinated multi-agent response flows.
-- `[ ]` Add recommendation aggregation layer for cross-agent merge/rank policies.
-- `[ ]` Define federated data hooks (`fetchData`, `getUserProfile`) with shared access controls.
-- `[ ]` Add explicit feedback submission flow from UI/client through mediator.
-- `[ ]` Add per-agent runtime health and latency observability hooks.
+- `[x]` Formalize `IAgent` and `IMediator` contracts across service boundaries (`/v1/contracts` + typed Python contracts).
+- `[x]` Add dynamic agent registry for `resolveAgent(domain)` to remove hard-coded dispatch.
+- `[x]` Implement mediator fan-out and coordinated multi-agent response flows.
+- `[x]` Add recommendation aggregation layer for cross-agent merge/rank policies (`score_desc` + `rrf`).
+- `[x]` Define federated data hooks (`fetchData`, `getUserProfile`) with shared access controls.
+- `[x]` Add explicit feedback submission flow from UI/client through mediator.
+- `[x]` Add per-agent runtime health and latency observability hooks.
 
 ## Data and ML Platform
 
-- `[ ]` Add data lake / warehouse pipelines for raw and aggregated analytics.
-- `[ ]` Harden ETL-based retrain trigger controls and observability thresholds.
+- `[x]` Add data lake / warehouse pipelines for raw and aggregated analytics.
+- `[x]` Harden ETL-based retrain trigger controls and observability thresholds.
 
 ### Feedback Loop Items
 
-- `[ ]` Improve online feature updater for user/item embeddings from fresh events.
-- `[ ]` Harden negative/implicit feedback production coverage across all UX/API touchpoints.
-- `[ ]` Tighten automated retraining trigger quality gates based on sufficient fresh feedback.
+- `[~]` Improve online feature updater for user/item embeddings from fresh events.
+- `[~]` Harden negative/implicit feedback production coverage across all UX/API touchpoints.
+- `[x]` Tighten automated retraining trigger quality gates based on sufficient fresh feedback.
 
 ## Agent and Recommendation Intelligence
 
@@ -94,7 +94,7 @@ This file tracks pending and completed work against the target SuperAgent archit
 - `[x]` Kafka/event streaming
 - `[~]` Schema registry (implemented path, runtime optional)
 - `[x]` Stream processor
-- `[ ]` Online feature updater maturity
+- `[~]` Online feature updater maturity
 
 ### Milestone 3: Advanced ML Platform
 
