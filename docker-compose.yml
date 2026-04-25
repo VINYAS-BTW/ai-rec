@@ -61,7 +61,8 @@ services:
 
   back2:
     build:
-      context: ./backend/back2
+      context: ./backend
+      dockerfile: back2/Dockerfile
     ports:
       - "8000:8000"
     environment:

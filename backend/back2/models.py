@@ -139,3 +139,14 @@ class ServingControl(Base):
     shadow_error_count = Column(Integer, nullable=False, default=0)
     last_request_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SuperAgentSession(Base):
+    __tablename__ = "superagent_sessions"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, index=True, nullable=False, unique=True)
+    payload_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

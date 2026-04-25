@@ -14,6 +14,7 @@ import numpy as np
 import tempfile
 import random
 import time
+from threading import RLock
 from scipy.sparse import issparse, save_npz
 import jwt
 from fastapi import FastAPI, File, UploadFile, Form, Depends, HTTPException, BackgroundTasks, Header, Request
@@ -37,6 +38,100 @@ from feature_store import FeatureStore
 from vector_store import ProjectVectorStore, get_vector_store, evict_vector_store, to_dense_for_index, FAISS_AVAILABLE
 # --- MLflow path-only URI fix: patch registry before mlflow is used so all callers get the wrapper ---
 _BACK2_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class InProcessTTLCache:
+    def __init__(self, default_ttl_seconds: int = 45, max_entries: int = 1000):
+        self.default_ttl_seconds = max(1, int(default_ttl_seconds))
+        self.max_entries = max(100, int(max_entries))
+        self._data: Dict[str, Any] = {}
+        self._lock = RLock()
+
+    def get(self, key: str) -> Optional[Any]:
+        now = time.time()
+        with self._lock:
+            entry = self._data.get(key)
+            if not entry:
+                return None
+            expires_at, value = entry
+            if expires_at <= now:
+                self._data.pop(key, None)
+                return None
+            return value
+
+    def set(self, key: str, value: Any, ttl_seconds: Optional[int] = None) -> None:
+        ttl = max(1, int(ttl_seconds or self.default_ttl_seconds))
+        expires_at = time.time() + ttl
+        with self._lock:
+            self._data[key] = (expires_at, value)
+            if len(self._data) > self.max_entries:
+                # Drop oldest expiry entries first to keep cache bounded.
+                stale_first = sorted(self._data.items(), key=lambda kv: kv[1][0])[: len(self._data) - self.max_entries]
+                for cache_key, _ in stale_first:
+                    self._data.pop(cache_key, None)
+
+    def invalidate_prefix(self, prefix: str) -> None:
+        with self._lock:
+            to_delete = [k for k in self._data.keys() if str(k).startswith(prefix)]
+            for k in to_delete:
+                self._data.pop(k, None)
+
+
+class PersistentSuperAgentSessionStore:
+    """DB-backed session persistence with in-memory fallback."""
+
+    def __init__(self):
+        self._fallback = InMemorySessionStore()
+
+    def get(self, session_id: str) -> Dict[str, Any]:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {}
+        db = database.SessionLocal()
+        try:
+            row = db.query(models.SuperAgentSession).filter(models.SuperAgentSession.session_id == sid).first()
+            if not row:
+                return self._fallback.get(sid)
+            payload = json.loads(row.payload_json or "{}")
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return self._fallback.get(sid)
+        finally:
+            db.close()
+
+    def upsert(self, session_id: str, data: Dict[str, Any]) -> None:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        incoming = dict(data or {})
+        db = database.SessionLocal()
+        try:
+            row = db.query(models.SuperAgentSession).filter(models.SuperAgentSession.session_id == sid).first()
+            prev: Dict[str, Any] = {}
+            if row and row.payload_json:
+                try:
+                    loaded = json.loads(row.payload_json)
+                    if isinstance(loaded, dict):
+                        prev = loaded
+                except Exception:
+                    prev = {}
+            merged = {**prev, **incoming}
+            encoded = json.dumps(merged)
+            if row:
+                row.payload_json = encoded
+            else:
+                db.add(models.SuperAgentSession(session_id=sid, payload_json=encoded))
+            db.commit()
+        except Exception:
+            db.rollback()
+            self._fallback.upsert(sid, incoming)
+        finally:
+            db.close()
+
+    def new_session(self) -> str:
+        sid = self._fallback.new_session()
+        self.upsert(sid, {"created_at_ms": int(time.time() * 1000)})
+        return sid
 
 
 def _path_to_file_uri(path: str) -> str:
@@ -72,32 +167,83 @@ def _webhook_service_url():
     return (os.getenv("WEBHOOK_SERVICE_URL") or "http://localhost:3001").rstrip("/")
 
 
+_webhook_breaker_state = {"failures": 0, "open_until_ts": 0.0}
+WEBHOOK_RETRY_ATTEMPTS = int(os.getenv("WEBHOOK_RETRY_ATTEMPTS", "2"))
+WEBHOOK_TIMEOUT_SECONDS = float(os.getenv("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_BREAKER_FAILURE_THRESHOLD = int(os.getenv("WEBHOOK_BREAKER_FAILURE_THRESHOLD", "5"))
+WEBHOOK_BREAKER_COOLDOWN_SECONDS = int(os.getenv("WEBHOOK_BREAKER_COOLDOWN_SECONDS", "30"))
+
+
+def _webhook_breaker_open() -> bool:
+    return _webhook_breaker_state["open_until_ts"] > time.time()
+
+
+def _webhook_record_success() -> None:
+    _webhook_breaker_state["failures"] = 0
+    _webhook_breaker_state["open_until_ts"] = 0.0
+
+
+def _webhook_record_failure() -> None:
+    failures = int(_webhook_breaker_state.get("failures", 0)) + 1
+    _webhook_breaker_state["failures"] = failures
+    if failures >= WEBHOOK_BREAKER_FAILURE_THRESHOLD:
+        _webhook_breaker_state["open_until_ts"] = time.time() + WEBHOOK_BREAKER_COOLDOWN_SECONDS
+        _webhook_breaker_state["failures"] = 0
+
+
+async def _post_with_resilience(client: httpx.AsyncClient, webhook_url: str, payload: Dict[str, Any]) -> bool:
+    if _webhook_breaker_open():
+        return False
+    for attempt in range(1, WEBHOOK_RETRY_ATTEMPTS + 1):
+        try:
+            res = await client.post(webhook_url, json=payload, timeout=WEBHOOK_TIMEOUT_SECONDS)
+            if 200 <= int(res.status_code) < 300:
+                _webhook_record_success()
+                return True
+        except Exception:
+            pass
+        _webhook_record_failure()
+        if attempt < WEBHOOK_RETRY_ATTEMPTS:
+            await asyncio.sleep(0.2 * attempt)
+    return False
+
+
 async def notify_webhooks(event_type: str, payload: dict):
     """Send event payload to all registered external apps via the Node webhook service."""
     try:
         base = _webhook_service_url()
+        if _webhook_breaker_open():
+            print("WARN: webhook circuit breaker open, skipping notify_webhooks")
+            return
         async with httpx.AsyncClient() as client:
-            res = await client.get(f"{base}/api/apps")
+            res = await client.get(f"{base}/api/apps", timeout=WEBHOOK_TIMEOUT_SECONDS)
             if res.status_code != 200:
                 print("WARN: Could not fetch registered apps from webhook service")
+                _webhook_record_failure()
                 return
             apps = res.json()
+            _webhook_record_success()
 
             for app in apps:
                 try:
-                    await client.post(
+                    ok = await _post_with_resilience(
+                        client,
                         app["webhook_url"],
-                        json={
+                        {
                             "event": event_type,
                             "data": payload,
                             "api_key": app["api_key"],
                         },
-                        timeout=10.0,
                     )
-                    print(f"INFO: Notified {app['app_name']} at {app['webhook_url']}")
+                    if ok:
+                        print(f"INFO: Notified {app['app_name']} at {app['webhook_url']}")
+                    else:
+                        print(f"WARN: Skipped {app['app_name']} due to retry/circuit policy")
                 except Exception as e:
+                    _webhook_record_failure()
                     print(f"ERROR: Failed to send to {app['app_name']}: {e}")
     except Exception as e:
+        _webhook_record_failure()
         print(f"ERROR: notify_webhooks failed: {e}")
 # --- App Setup & Model Storage ---
 # Override with USER_UPLOADS_DIR in .env when deploying (e.g. Docker volume path).
@@ -429,7 +575,7 @@ def get_current_user_id(
 # =========================
 # SuperAgent (MVP) – define AFTER auth dependency
 # =========================
-_superagent_sessions = InMemorySessionStore()
+_superagent_sessions = PersistentSuperAgentSessionStore()
 _superagent = SuperAgent(session_store=_superagent_sessions)
 
 
@@ -545,6 +691,7 @@ async def superagent_chat(
             item_title=None,
             user_id=None,
         ),
+        background_tasks=background_tasks,
         current_user_id=current_user_id,
         db=db,
     )
@@ -1739,6 +1886,13 @@ def get_project_data(project_id: int, user_id: int, db: Session, file_type: mode
 
 # Max items/users returned for dropdowns (keeps response and UI fast)
 ITEMS_USERS_LIMIT = 2000
+API_CACHE_TTL_SECONDS = int(os.getenv("API_CACHE_TTL_SECONDS", "45"))
+_api_cache = InProcessTTLCache(default_ttl_seconds=API_CACHE_TTL_SECONDS, max_entries=1500)
+
+
+def _cache_key(namespace: str, payload: Dict[str, Any]) -> str:
+    safe_payload = payload or {}
+    return f"{namespace}:{json.dumps(safe_payload, sort_keys=True, default=str)}"
 
 
 def _resolve_target_column_and_values(df: pd.DataFrame, content_schema: dict) -> tuple:
@@ -1842,6 +1996,10 @@ def get_project_context_options(
         raise HTTPException(status_code=400, detail="Project is not ready.")
     if db_project.model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID):
         raise HTTPException(status_code=400, detail="Context options are only available for parameter_driven or hybrid projects.")
+    cache_key = _cache_key("project_context_options", {"project_id": int(project_id), "user_id": int(current_user_id)})
+    cached = _api_cache.get(cache_key)
+    if isinstance(cached, dict):
+        return schemas.ContextOptionsResponse(**cached)
     content_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.CONTENT), None)
     if not content_file:
         raise HTTPException(status_code=404, detail="Content file not found.")
@@ -1932,7 +2090,13 @@ def get_project_context_options(
     _resolved_col, target_values = _resolve_target_column_and_values(df, content_schema)
     if _resolved_col:
         target_col = _resolved_col
-    return schemas.ContextOptionsResponse(target_column=target_col, feature_columns=feature_columns, target_values=target_values)
+    payload = {
+        "target_column": target_col,
+        "feature_columns": [fc.model_dump() for fc in feature_columns],
+        "target_values": target_values,
+    }
+    _api_cache.set(cache_key, payload, ttl_seconds=API_CACHE_TTL_SECONDS)
+    return schemas.ContextOptionsResponse(**payload)
 
 
 def normalize_context_to_project_columns(
@@ -2001,6 +2165,22 @@ async def get_recommendations(
         raise HTTPException(status_code=400, detail="user_id is required for this collaborative model.")
     # parameter_driven and hybrid: either context (filter by) or item_title (recommend similar to this item) or both
 
+    cache_key = _cache_key(
+        "project_recommendations",
+        {
+            "project_id": int(project_id),
+            "user_scope": int(current_user_id),
+            "model_type": str(model_type),
+            "context": context,
+            "item_title": item_title,
+            "user_id": user_id,
+            "n": int(n),
+        },
+    )
+    cached_resp = _api_cache.get(cache_key)
+    if isinstance(cached_resp, dict):
+        return schemas.RecommendationResponse(**cached_resp)
+
     try:
         pred = await _predict_project(
             db=db,
@@ -2034,6 +2214,13 @@ async def get_recommendations(
             "metadata": {},
         })
 
+        response_payload = {
+            "input_item_title": item_title if model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID) else None,
+            "input_user_id": user_id if model_type == models.ModelType.COLLABORATIVE else None,
+            "model_type": model_type,
+            "recommendations": recs,
+        }
+        _api_cache.set(cache_key, response_payload, ttl_seconds=API_CACHE_TTL_SECONDS)
         return schemas.RecommendationResponse(
             input_item_title=item_title if model_type not in (models.ModelType.PARAMETER_DRIVEN, models.ModelType.HYBRID) else None,
             input_user_id=user_id if model_type == models.ModelType.COLLABORATIVE else None,
@@ -2485,6 +2672,15 @@ async def agent_single_recommend(
     current_user_id: int = Depends(get_current_user_id),
     db: Session = Depends(database.get_db),
 ):
+    req_payload = req.model_dump()
+    cache_key = _cache_key(
+        "agent_single_recommend",
+        {"user_scope": int(current_user_id), "request": req_payload},
+    )
+    cached = _api_cache.get(cache_key)
+    if isinstance(cached, dict):
+        return cached
+
     domains = [req.target_domain] if req.target_domain else _infer_domains_from_context(req.context)
     if not domains:
         raise HTTPException(
@@ -2577,7 +2773,9 @@ async def agent_single_recommend(
         },
     })
 
-    return {"correlation_id": req.correlation_id, "results": results}
+    response_payload = {"correlation_id": req.correlation_id, "results": results}
+    _api_cache.set(cache_key, response_payload, ttl_seconds=API_CACHE_TTL_SECONDS)
+    return response_payload
 
 
 @app.get("/agent/v1/presets")
@@ -2611,6 +2809,14 @@ def agent_context_options_by_domain(
     Context sliders / categorical values for the auto-selected READY project for this domain
     (same payload as /project/{id}/context-options, plus project_id).
     """
+    cache_key = _cache_key(
+        "agent_context_options",
+        {"domain_slug": str(domain_slug), "user_id": int(current_user_id)},
+    )
+    cached = _api_cache.get(cache_key)
+    if isinstance(cached, dict):
+        return schemas.AgentContextOptionsResponse(**cached)
+
     picked = _auto_pick_projects_for_domains(
         db=db,
         current_user_id=current_user_id,
@@ -2626,6 +2832,14 @@ def agent_context_options_by_domain(
             ),
         )
     inner = get_project_context_options(project_id=int(pid), current_user_id=current_user_id, db=db)
+    payload = {
+        "project_id": int(pid),
+        "domain_slug": str(domain_slug),
+        "target_column": inner.target_column,
+        "feature_columns": [fc.model_dump() for fc in (inner.feature_columns or [])],
+        "target_values": inner.target_values,
+    }
+    _api_cache.set(cache_key, payload, ttl_seconds=API_CACHE_TTL_SECONDS)
     return schemas.AgentContextOptionsResponse(
         project_id=int(pid),
         domain_slug=str(domain_slug),
