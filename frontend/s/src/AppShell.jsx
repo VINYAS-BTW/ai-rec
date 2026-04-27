@@ -4,6 +4,7 @@ import RecommenderPanel from "./components/RecommenderPanel";
 import Dashboard from "./pages/Dashboard";
 import DomainAgents from "./pages/DomainAgents";
 import SuperAgent from "./pages/SuperAgent";
+import OperationsHub from "./pages/OperationsHub";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
@@ -53,6 +54,12 @@ const NAV_ITEMS = [
     label: "Super agent",
     icon: Sparkles,
     description: "Chat → intent → recommend",
+  },
+  {
+    id: "operations",
+    label: "Operations Hub",
+    icon: Settings,
+    description: "System health & experiments",
   },
   {
     id: "dashboard",
@@ -1602,6 +1609,8 @@ export default function AppShell() {
         return <DomainAgents />;
       case "superagent":
         return <SuperAgent />;
+      case "operations":
+        return <OperationsHub />;
       case "dashboard":
         return <Dashboard />;
       case "analytics":

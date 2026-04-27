@@ -150,3 +150,70 @@ class SuperAgentSession(Base):
     payload_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Experimentation Service Tables
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ExperimentStatus(str, enum.Enum):
+    DRAFT = "draft"
+    RUNNING = "running"
+    CONCLUDED = "concluded"
+    ARCHIVED = "archived"
+
+
+class ExperimentDefinition(Base):
+    """An A/B experiment definition (variants, traffic splits, goal metric)."""
+    __tablename__ = "experiment_definitions"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, index=True, nullable=True)           # auth user
+    project_id = Column(Integer, index=True, nullable=True)          # optional project scope
+    name = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    # JSON: [{"id": "control", "label": "Control", "weight": 50}, ...]
+    variants_json = Column(Text, nullable=False, default="[]")       
+    # JSON: {"control": 50, "variant_a": 50}  (% of total traffic)
+    traffic_split_json = Column(Text, nullable=False, default="{}")  
+    goal_metric = Column(String, nullable=True)                       # e.g. "click_rate"
+    status = Column(String, nullable=False, default=ExperimentStatus.DRAFT)
+    winner_variant = Column(String, nullable=True)                    # set on conclude
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    concluded_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    assignments = relationship("ExperimentAssignment", back_populates="experiment", cascade="all, delete-orphan")
+
+
+class ExperimentAssignment(Base):
+    """Records which variant a user/session was assigned to."""
+    __tablename__ = "experiment_assignments"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    experiment_id = Column(Integer, ForeignKey("recommender.experiment_definitions.id"), index=True, nullable=False)
+    bucket_key = Column(String, index=True, nullable=False)          # user_id or session_id
+    variant = Column(String, nullable=False)
+    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    experiment = relationship("ExperimentDefinition", back_populates="assignments")
+    events = relationship("ExperimentEvent", back_populates="assignment", cascade="all, delete-orphan")
+
+
+class ExperimentEvent(Base):
+    """An outcome event (impression / click / conversion) tied to an assignment."""
+    __tablename__ = "experiment_events"
+    __table_args__ = {"schema": "recommender"}
+
+    id = Column(Integer, primary_key=True, index=True)
+    assignment_id = Column(Integer, ForeignKey("recommender.experiment_assignments.id"), index=True, nullable=False)
+    # impression | click | conversion | custom
+    event_type = Column(String, nullable=False, index=True)
+    value = Column(Float, nullable=True)                             # optional numeric payload
+    meta_json = Column(Text, nullable=True)
+    occurred_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    assignment = relationship("ExperimentAssignment", back_populates="events")

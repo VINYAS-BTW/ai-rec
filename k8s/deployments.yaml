@@ -1,0 +1,305 @@
+---
+# ── Shared ConfigMap ──────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airec-config
+  namespace: airec
+data:
+  DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/airec"
+  MLFLOW_TRACKING_URI: "postgresql://postgres:postgres@postgres:5432/airec"
+  KAFKA_BROKERS: "kafka:29092"
+  REDIS_URL: "redis://redis:6379"
+  EVENT_LOGGING_ENABLED: "true"
+  CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+  WEBHOOK_SERVICE_URL: "http://webhooks:3001"
+  FASTAPI_URL: "http://back2:8000"
+  BACK2_RETRAIN_URL: "http://back2:8000"
+  BACK2_URL: "http://back2:8000"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airec-secrets
+  namespace: airec
+type: Opaque
+stringData:
+  JWT_SECRET: "dev-jwt-secret"                # override in production
+  BACK2_INTERNAL_KEY: "dev-internal-key"      # override in production
+---
+# ── back2 (ML Backend) ───────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: back2
+  namespace: airec
+  labels:
+    app: back2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: back2
+  template:
+    metadata:
+      labels:
+        app: back2
+    spec:
+      containers:
+        - name: back2
+          image: ghcr.io/OWNER/ai-rec-back2:latest    # replaced by CI
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: airec-config
+            - secretRef:
+                name: airec-secrets
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: back2
+  namespace: airec
+spec:
+  selector:
+    app: back2
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: back2-hpa
+  namespace: airec
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: back2
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# ── Auth Service ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: airec
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      containers:
+        - name: auth
+          image: ghcr.io/OWNER/ai-rec-auth:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: airec-config
+            - secretRef:
+                name: airec-secrets
+          env:
+            - name: PORT
+              value: "8080"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: airec
+spec:
+  selector:
+    app: auth
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# ── Webhooks Service ─────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhooks
+  namespace: airec
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: webhooks
+  template:
+    metadata:
+      labels:
+        app: webhooks
+    spec:
+      containers:
+        - name: webhooks
+          image: ghcr.io/OWNER/ai-rec-webhooks:latest
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: airec-config
+            - secretRef:
+                name: airec-secrets
+          env:
+            - name: PORT
+              value: "3001"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhooks
+  namespace: airec
+spec:
+  selector:
+    app: webhooks
+  ports:
+    - port: 3001
+      targetPort: 3001
+---
+# ── Agent Service ─────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-service
+  namespace: airec
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-service
+  template:
+    metadata:
+      labels:
+        app: agent-service
+    spec:
+      containers:
+        - name: agent-service
+          image: ghcr.io/OWNER/ai-rec-agent:latest
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: airec-config
+            - secretRef:
+                name: airec-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-service
+  namespace: airec
+spec:
+  selector:
+    app: agent-service
+  ports:
+    - port: 8002
+      targetPort: 8002
+---
+# ── Frontend ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: airec
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/OWNER/ai-rec-frontend:latest
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: airec
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
