@@ -9,6 +9,7 @@ import uuid
 import json
 import asyncio
 import pickle
+import re
 import shutil
 import numpy as np
 import tempfile
@@ -592,8 +593,267 @@ class SuperAgentChatResponse(BaseModel):
     status: str  # "clarify" | "ok"
     target_domain: Optional[str] = None
     used_context: Dict[str, Any] = {}
+    response_mode: str = "recommendation"  # "recommendation" | "analytics"
+    answer_text: Optional[str] = None
     question: Optional[Dict[str, Any]] = None
     results: Optional[List[Dict[str, Any]]] = None
+
+
+def _tokenize_text(raw: str) -> List[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", str(raw or "").lower()) if t]
+
+
+def _normalize_token(token: str) -> str:
+    t = str(token or "").lower().strip()
+    if not t:
+        return ""
+    synonym_map = {
+        "reliable": "reliability",
+        "reliability": "reliability",
+        "trustworthy": "reliability",
+        "faster": "speed",
+        "fast": "speed",
+        "quick": "speed",
+        "slow": "speed",
+        "slower": "speed",
+        "cheap": "cost",
+        "cheapest": "cost",
+        "expensive": "cost",
+        "price": "cost",
+        "priced": "cost",
+        "timely": "time",
+        "ontime": "on_time",
+        "late": "delay",
+        "delayed": "delay",
+        "safe": "safety",
+        "safest": "safety",
+        "quality": "quality",
+        "accurate": "accuracy",
+    }
+    if t in synonym_map:
+        return synonym_map[t]
+    for suffix in ("ability", "ibility", "ingly", "edly", "ness", "ment", "tion", "sion", "ing", "ed", "ly", "es", "s"):
+        if len(t) > 4 and t.endswith(suffix):
+            t = t[: -len(suffix)]
+            break
+    return t
+
+
+def _normalized_token_set(raw: str) -> set[str]:
+    return {nt for nt in (_normalize_token(tok) for tok in _tokenize_text(raw)) if nt}
+
+
+def _infer_superagent_intent(message: str) -> str:
+    t = str(message or "").lower()
+    if any(k in t for k in ("average", "avg", "mean")):
+        return "average"
+    if any(k in t for k in ("worst", "lowest", "least", "bottom")):
+        return "worst"
+    if any(k in t for k in ("best", "highest", "top", "most")):
+        return "best"
+    return "recommendation"
+
+
+def _pick_numeric_metric_column(message: str, df: pd.DataFrame, target_col: Optional[str]) -> Optional[str]:
+    numeric_cols = [c for c in df.columns if c != target_col and pd.api.types.is_numeric_dtype(df[c])]
+    if not numeric_cols:
+        return None
+    by_match = re.search(r"\bby\s+([a-zA-Z0-9_ ]{2,60})", str(message or ""), flags=re.IGNORECASE)
+    if by_match:
+        hint_raw = by_match.group(1).strip()
+        hint = re.split(r"\b(where|with|for|in|on)\b", hint_raw, flags=re.IGNORECASE)[0].strip()
+        hint_l = hint.lower().replace(" ", "_")
+        direct_map = {str(c).lower(): c for c in numeric_cols}
+        if hint_l in direct_map:
+            return direct_map[hint_l]
+        # token-overlap fallback for hints like "on time percentage"
+        hint_tokens = _normalized_token_set(hint)
+        best_hint_col = None
+        best_hint_score = -1
+        for col in numeric_cols:
+            c_tokens = _normalized_token_set(str(col))
+            score = len(hint_tokens.intersection(c_tokens))
+            if score > best_hint_score:
+                best_hint_score = score
+                best_hint_col = col
+        if best_hint_col and best_hint_score > 0:
+            return best_hint_col
+    msg_tokens = _normalized_token_set(message)
+    if not msg_tokens:
+        return numeric_cols[0]
+    ranked: List[tuple[int, str]] = []
+    for col in numeric_cols:
+        col_tokens = _normalized_token_set(col.replace("_", " "))
+        score = len(msg_tokens.intersection(col_tokens))
+        if any(x in str(col).lower() for x in ("score", "rating", "pct", "accuracy", "reliability")):
+            score += 1
+        ranked.append((score, col))
+    ranked.sort(key=lambda x: (-x[0], x[1]))
+    return ranked[0][1]
+
+
+def _infer_context_from_message_values(message: str, df: pd.DataFrame, base_context: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(base_context or {})
+    t = str(message or "").lower()
+    # Auto-detect categorical value mentions (e.g., "air mode") when user didn't type key=value.
+    for col in df.columns:
+        if col in out:
+            continue
+        series = df[col]
+        if pd.api.types.is_numeric_dtype(series):
+            continue
+        # Prefer most frequent values first to improve hit-rate for real-world phrasing.
+        value_counts = (
+            series.dropna()
+            .astype(str)
+            .str.strip()
+            .value_counts(dropna=True)
+        )
+        unique_vals = value_counts.index.tolist()
+        # Keep bounded for perf, but much larger than before for better generalization.
+        for val in unique_vals[:400]:
+            vv = str(val).strip().lower()
+            if not vv or len(vv) < 2:
+                continue
+            if re.search(rf"\b{re.escape(vv)}\b", t):
+                out[col] = val
+                break
+    return out
+
+
+def _message_has_attribute_signal(
+    message: str,
+    df: pd.DataFrame,
+    target_col: Optional[str],
+    before_context: Dict[str, Any],
+    after_context: Dict[str, Any],
+) -> bool:
+    t = str(message or "").lower()
+    if re.search(r"[a-zA-Z_][a-zA-Z0-9_]*\s*[:=]\s*[^,\n;]+", t):
+        return True
+    if re.search(r"\bby\s+[a-zA-Z0-9_ ]{2,60}", t):
+        return True
+    if len(after_context or {}) > len(before_context or {}):
+        return True
+
+    generic_tokens = {
+        "give", "me", "the", "best", "worst", "top", "most", "least", "highest", "lowest",
+        "carrier", "carriers", "warehouse", "warehouses", "supplier", "suppliers",
+        "material", "materials", "sku", "skus", "lane", "lanes", "logistics", "supply", "chain",
+    }
+    msg_tokens = {_normalize_token(tok) for tok in _tokenize_text(t) if tok not in generic_tokens}
+    msg_tokens.discard("")
+    if not msg_tokens:
+        return False
+
+    feature_cols = [c for c in df.columns if c != target_col]
+    for col in feature_cols:
+        col_tokens = _normalized_token_set(str(col))
+        if msg_tokens.intersection(col_tokens):
+            return True
+    return False
+
+
+def _apply_context_filters(df: pd.DataFrame, context: Dict[str, Any]) -> pd.DataFrame:
+    filtered = df
+    for k, v in (context or {}).items():
+        if k not in filtered.columns:
+            continue
+        col = filtered[k]
+        if pd.api.types.is_numeric_dtype(col):
+            try:
+                num_v = float(v)
+                filtered = filtered[pd.to_numeric(filtered[k], errors="coerce") == num_v]
+            except Exception:
+                continue
+        else:
+            filtered = filtered[filtered[k].astype(str).str.strip().str.lower() == str(v).strip().lower()]
+    return filtered
+
+
+def _build_analytics_response(
+    *,
+    message: str,
+    target_domain: str,
+    project_id: int,
+    df: pd.DataFrame,
+    target_col: str,
+    context: Dict[str, Any],
+    n: int,
+) -> Optional[Dict[str, Any]]:
+    intent = _infer_superagent_intent(message)
+    if intent == "recommendation":
+        return None
+
+    scoped_df = _apply_context_filters(df, context)
+    if scoped_df.empty:
+        return {
+            "response_mode": "analytics",
+            "answer_text": "No rows match the requested constraints.",
+            "results": [{
+                "domain_slug": target_domain,
+                "project_id": project_id,
+                "model_type": "analytics",
+                "recommendations": [],
+            }],
+        }
+
+    metric_col = _pick_numeric_metric_column(message, scoped_df, target_col)
+    if not metric_col:
+        return {
+            "response_mode": "analytics",
+            "answer_text": "I couldn't find a numeric metric column for best/worst/average analysis in this dataset.",
+            "results": [{
+                "domain_slug": target_domain,
+                "project_id": project_id,
+                "model_type": "analytics",
+                "recommendations": [],
+            }],
+        }
+
+    metric_series = pd.to_numeric(scoped_df[metric_col], errors="coerce")
+    scoped_df = scoped_df.assign(__metric__=metric_series).dropna(subset=["__metric__"])
+    if scoped_df.empty:
+        return {
+            "response_mode": "analytics",
+            "answer_text": f"Column '{metric_col}' has no valid numeric values after filtering.",
+            "results": [{
+                "domain_slug": target_domain,
+                "project_id": project_id,
+                "model_type": "analytics",
+                "recommendations": [],
+            }],
+        }
+
+    if intent == "average":
+        mean_val = float(scoped_df["__metric__"].mean())
+        answer_text = f"Average {metric_col} is {mean_val:.4f} across {len(scoped_df)} matching rows."
+        recs = [{"value": "average", "score": mean_val}]
+    else:
+        grouped = (
+            scoped_df.groupby(target_col, dropna=False)["__metric__"]
+            .mean()
+            .reset_index()
+            .rename(columns={"__metric__": "score"})
+        )
+        ascending = intent == "worst"
+        ranked = grouped.sort_values("score", ascending=ascending).head(max(1, int(n or 10)))
+        recs = []
+        for _, row in ranked.iterrows():
+            recs.append({"value": str(row[target_col]), "score": float(row["score"])})
+        direction = "lowest" if intent == "worst" else "highest"
+        answer_text = f"Showing {len(recs)} {target_col} entries with {direction} average {metric_col}."
+
+    return {
+        "response_mode": "analytics",
+        "answer_text": answer_text,
+        "results": [{
+            "domain_slug": target_domain,
+            "project_id": project_id,
+            "model_type": "analytics",
+            "recommendations": recs,
+        }],
+    }
 
 
 @app.post("/superagent/v1/chat", response_model=SuperAgentChatResponse)
@@ -610,6 +870,7 @@ async def superagent_chat(
     base_ctx: Dict[str, Any] = {**(prev.get("context") or {}), **(req.context or {})}
 
     target_domain, merged_context = _superagent.parse(req.message, explicit_domain, base_ctx)
+    intent = _infer_superagent_intent(req.message)
     inferred_k = infer_top_k_from_text(req.message)
     n = int(inferred_k) if inferred_k and 1 <= int(inferred_k) <= 50 else int(req.n or 10)
     clarify = _superagent.need_clarification(target_domain)
@@ -622,50 +883,14 @@ async def superagent_chat(
             status="clarify",
             target_domain=None,
             used_context=merged_context,
+            response_mode="recommendation",
+            answer_text=None,
             question={"key": clarify.key, "prompt": clarify.prompt, "options": clarify.options},
             results=None,
         )
 
     # Persist domain; context is saved after we normalise (below) once we have a concrete project.
     _superagent_sessions.upsert(session_id, {"target_domain": target_domain})
-
-    # If user asked "best X" but provided no constraints, ask a follow-up instead of falling back
-    # to "most frequent targets" (which looks like static/first rows).
-    if not merged_context:
-        picked = _auto_pick_projects_for_domains(
-            db=db,
-            current_user_id=current_user_id,
-            domains=[str(target_domain)],
-        )
-        pid = picked.get(str(target_domain))
-        suggestions: List[str] = []
-        if pid:
-            try:
-                inner = get_project_context_options(project_id=int(pid), current_user_id=current_user_id, db=db)
-                suggestions = [
-                    fc.name
-                    for fc in (inner.feature_columns or [])
-                    if fc and getattr(fc, "name", None) and str(fc.name) != "mean_rating"
-                ][:12]
-            except Exception:
-                suggestions = []
-
-        _superagent_sessions.upsert(session_id, {"target_domain": str(target_domain)})
-        return SuperAgentChatResponse(
-            session_id=session_id,
-            status="clarify",
-            target_domain=str(target_domain),
-            used_context={},
-            question={
-                "key": "constraints",
-                "prompt": (
-                    f"To recommend {target_domain}, tell me what constraints matter (key=value). "
-                    "Pick a constraint to start, or type something like: mode=road, region=North"
-                ),
-                "options": suggestions or None,
-            },
-            results=None,
-        )
 
     picked_sa = _auto_pick_projects_for_domains(
         db=db,
@@ -680,6 +905,80 @@ async def superagent_chat(
             project_id=int(pid_sa),
             context=merged_context,
         )
+        db_project = get_project_for_user(int(pid_sa), current_user_id, db)
+        content_file = next((f for f in db_project.uploaded_files if f.file_type == models.FileType.CONTENT), None)
+        if content_file:
+            cpath = _resolve_uploaded_file_path(content_file, db)
+            if cpath:
+                df_content = pd.read_csv(cpath, low_memory=False)
+                content_schema = {s.app_schema_key: s.user_csv_column for s in content_file.schema_mappings}
+                target_col = content_schema.get("target_column") or content_schema.get("item_title") or content_schema.get("item_id")
+                if target_col and target_col in df_content.columns:
+                    before_infer_context = dict(merged_context or {})
+                    merged_context = _infer_context_from_message_values(req.message, df_content, merged_context)
+                    has_attribute_signal = _message_has_attribute_signal(
+                        req.message,
+                        df_content,
+                        target_col,
+                        before_infer_context,
+                        merged_context,
+                    )
+
+                    # Case 1: generic "best/worst X" with no constraints/attribute hints -> ask constraints.
+                    if not merged_context and not has_attribute_signal:
+                        suggestions: List[str] = []
+                        try:
+                            inner = get_project_context_options(project_id=int(pid_sa), current_user_id=current_user_id, db=db)
+                            suggestions = [
+                                fc.name
+                                for fc in (inner.feature_columns or [])
+                                if fc and getattr(fc, "name", None) and str(fc.name) != "mean_rating"
+                            ][:12]
+                        except Exception:
+                            suggestions = []
+                        _superagent_sessions.upsert(session_id, {"target_domain": str(target_domain)})
+                        return SuperAgentChatResponse(
+                            session_id=session_id,
+                            status="clarify",
+                            target_domain=str(target_domain),
+                            used_context={},
+                            response_mode="recommendation",
+                            answer_text=None,
+                            question={
+                                "key": "constraints",
+                                "prompt": (
+                                    f"To recommend {target_domain}, tell me what constraints matter (key=value). "
+                                    "Pick a constraint to start, or type something like: mode=road, region=North"
+                                ),
+                                "options": suggestions or None,
+                            },
+                            results=None,
+                        )
+
+                    analytics_payload = _build_analytics_response(
+                        message=req.message,
+                        target_domain=str(target_domain),
+                        project_id=int(pid_sa),
+                        df=df_content,
+                        target_col=target_col,
+                        context=merged_context,
+                        n=n,
+                    )
+                    if analytics_payload:
+                        _superagent_sessions.upsert(
+                            session_id,
+                            {"target_domain": str(target_domain), "context": merged_context},
+                        )
+                        return SuperAgentChatResponse(
+                            session_id=session_id,
+                            status="ok",
+                            target_domain=str(target_domain),
+                            used_context=merged_context,
+                            response_mode=str(analytics_payload.get("response_mode") or "analytics"),
+                            answer_text=analytics_payload.get("answer_text"),
+                            question=None,
+                            results=analytics_payload.get("results"),
+                        )
     _superagent_sessions.upsert(session_id, {"target_domain": str(target_domain), "context": merged_context})
 
     pred = await agent_single_recommend(
@@ -734,6 +1033,8 @@ async def superagent_chat(
         status="ok",
         target_domain=str(target_domain),
         used_context=merged_context,
+        response_mode="recommendation",
+        answer_text=None,
         question=None,
         results=results_payload,
     )

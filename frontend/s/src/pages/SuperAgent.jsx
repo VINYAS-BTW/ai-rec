@@ -18,6 +18,13 @@ export default function SuperAgent() {
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState([]); // { role, text, payload? }
 
+  const clearChat = () => {
+    setTranscript([]);
+    setMessage("");
+    setError("");
+    setSessionId("");
+  };
+
   const send = async () => {
     const msg = String(message || "").trim();
     if (!msg) return;
@@ -70,11 +77,13 @@ export default function SuperAgent() {
         const ctx = data?.used_context && Object.keys(data.used_context).length
           ? JSON.stringify(data.used_context)
           : "(no constraints — model used its default ranking)";
+        const mode = data?.response_mode || "recommendation";
+        const answer = data?.answer_text ? `\n${data.answer_text}` : "";
         setTranscript((t) => [
           ...t,
           {
             role: "assistant",
-            text: `Domain: ${data.target_domain}${pid != null ? ` · project #${pid}` : ""}\nConstraints sent to the model: ${ctx}`,
+            text: `Domain: ${data.target_domain}${pid != null ? ` · project #${pid}` : ""}\nMode: ${mode}\nConstraints sent to the model: ${ctx}${answer}`,
             payload: data,
           },
         ]);
@@ -239,6 +248,14 @@ export default function SuperAgent() {
                 placeholder="Type your request…"
                 className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-2xl text-sm font-third focus:outline-none focus:ring-2 focus:ring-cyan-400"
               />
+              <button
+                type="button"
+                disabled={running}
+                onClick={clearChat}
+                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl border border-slate-300 bg-white text-slate-700 font-third font-bold disabled:opacity-50"
+              >
+                Clear chat
+              </button>
               <button
                 type="button"
                 disabled={running}

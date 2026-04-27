@@ -107,3 +107,11 @@ This file tracks pending and completed work against the target SuperAgent archit
 - `[ ]` CI/CD + deployment controller
 - `[ ]` Kubernetes scaling/health automation
 - `[ ]` Disaster recovery + multi-region readiness
+
+
+
+
+
+### Extras: 
+
+- `[x]` Give worst carrier, agent tuning
