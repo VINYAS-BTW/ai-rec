@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps (back2)
+        working-directory: backend/back2
+        run: pip install -r requirements.txt
+
+      - name: Run Python lint
+        working-directory: backend/back2
+        run: |
+          pip install flake8
+          flake8 . --max-line-length=130 --exclude=__pycache__,mlflow_artifacts,project_models || true
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node deps (webhooks)
+        working-directory: backend/webhooks_services
+        run: npm ci
+
+      - name: Lint Node
+        working-directory: backend/webhooks_services
+        run: npx eslint . --ext .js --max-warnings=50 || true
+
+      - name: Install frontend deps
+        working-directory: frontend/s
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend/s
+        run: npm run build
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker Compose build smoke test
+        run: docker compose build --parallel
+
+  publish-images:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: docker-smoke
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push images
+        run: |
+          REPO=ghcr.io/${{ github.repository_owner }}
+          TAG=${{ github.sha }}
+          docker compose build
+          docker tag ai-rec-mine-back2:latest      $REPO/ai-rec-back2:$TAG
+          docker tag ai-rec-mine-auth:latest       $REPO/ai-rec-auth:$TAG
+          docker tag ai-rec-mine-webhooks:latest   $REPO/ai-rec-webhooks:$TAG
+          docker tag ai-rec-mine-agent-service:latest $REPO/ai-rec-agent:$TAG
+          docker tag ai-rec-mine-frontend:latest   $REPO/ai-rec-frontend:$TAG
+          docker push $REPO/ai-rec-back2:$TAG
+          docker push $REPO/ai-rec-auth:$TAG
+          docker push $REPO/ai-rec-webhooks:$TAG
+          docker push $REPO/ai-rec-agent:$TAG
+          docker push $REPO/ai-rec-frontend:$TAG

@@ -1,0 +1,47 @@
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy"
+        required: true
+        default: "latest"
+      strategy:
+        description: "Deployment strategy: blue-green or canary"
+        required: true
+        default: "blue-green"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/ai-rec-mine
+            git pull origin main
+            export IMAGE_TAG=${{ steps.tag.outputs.tag }}
+            export STRATEGY=${{ github.event.inputs.strategy || 'blue-green' }}
+            bash scripts/deploy/deploy.sh $IMAGE_TAG $STRATEGY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Deployment failed for tag ${{ steps.tag.outputs.tag }}"
+          # Add Slack/email notification here

@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: airec
+
+resources:
+  - namespace.yaml
+  - postgres-statefulset.yaml
+  - infra.yaml
+  - deployments.yaml
+  - ingress.yaml
+
+# Override image tags during CI/CD:
+# images:
+#   - name: ghcr.io/OWNER/ai-rec-back2
+#     newTag: abc1234

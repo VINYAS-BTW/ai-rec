@@ -72,12 +72,12 @@ This file tracks pending and completed work against the target SuperAgent archit
 
 ## Experimentation, Observability, and Operations
 
-- `[ ]` Add experimentation service (A/B assignment, variant evaluation).
-- `[ ]` Extend admin dashboard with full system/model operational metrics.
-- `[ ]` Add CI/CD automation for training/testing/deployment lifecycle.
-- `[ ]` Add container registry and deployment controller (canary/blue-green/rollback).
-- `[ ]` Add Kubernetes orchestration capabilities (autoscaling, self-healing, service discovery).
-- `[ ]` Add disaster recovery controls (backup/restore, multi-region failover).
+- `[x]` Add experimentation service (A/B assignment, variant evaluation).
+- `[x]` Extend admin dashboard with full system/model operational metrics.
+- `[x]` Add CI/CD automation for training/testing/deployment lifecycle.
+- `[x]` Add container registry and deployment controller (canary/blue-green/rollback).
+- `[x]` Add Kubernetes orchestration capabilities (autoscaling, self-healing, service discovery).
+- `[x]` Add disaster recovery controls (backup/restore, multi-region failover).
 
 ## Milestone View (Updated)
 
@@ -100,13 +100,13 @@ This file tracks pending and completed work against the target SuperAgent archit
 
 - `[x]` Model registry/service lifecycle controls
 - `[ ]` Explainability + business rules
-- `[ ]` Experiment service
+- `[x]` Experiment service
 
 ### Milestone 4: Infrastructure Maturity
 
-- `[ ]` CI/CD + deployment controller
-- `[ ]` Kubernetes scaling/health automation
-- `[ ]` Disaster recovery + multi-region readiness
+- `[x]` CI/CD + deployment controller
+- `[x]` Kubernetes scaling/health automation
+- `[x]` Disaster recovery + multi-region readiness
 
 
 

@@ -1,17 +1,36 @@
 
 import asyncio
+import collections
 import hashlib
 import json
 import logging
 import os
+import threading
 import urllib.request
 import urllib.error
 import urllib.parse
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("kafka.producer")
+
+# ── In-memory event ring buffer (last 100 events for the admin event stream) ──
+_EVENT_RING_LOCK = threading.RLock()
+_EVENT_RING: collections.deque = collections.deque(maxlen=100)
+
+
+def _push_event_to_ring(event: Dict[str, Any]) -> None:
+    """Push a sanitized copy of the event into the ring buffer."""
+    safe = {k: v for k, v in event.items() if k != "api_key_hash"}
+    with _EVENT_RING_LOCK:
+        _EVENT_RING.append(safe)
+
+
+def get_recent_events(limit: int = 50) -> List[Dict[str, Any]]:
+    """Return last `limit` events from the ring buffer (newest first)."""
+    with _EVENT_RING_LOCK:
+        return list(reversed(list(_EVENT_RING)))[:max(1, int(limit))]
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ENABLED: bool = os.getenv("EVENT_LOGGING_ENABLED", "true").lower() != "false"
@@ -486,6 +505,7 @@ async def emit_event(partial: Dict[str, Any]) -> Optional[str]:
             ],
         )
         _record_success()
+        _push_event_to_ring(event)
         _status["last_success_at"] = datetime.now(timezone.utc).isoformat()
         _status["last_error"] = None
         _status["last_event_id"] = event.get("event_id")

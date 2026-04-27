@@ -1,0 +1,53 @@
+---
+# NGINX Ingress — routes all external traffic
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: airec-ingress
+  namespace: airec
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: airec.example.com   # replace with your domain
+      http:
+        paths:
+          - path: /api/auth(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: auth
+                port:
+                  number: 8080
+          - path: /api/ml(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: back2
+                port:
+                  number: 8000
+          - path: /api/webhooks(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: webhooks
+                port:
+                  number: 3001
+          - path: /api/agents(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: agent-service
+                port:
+                  number: 8002
+          - path: /(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

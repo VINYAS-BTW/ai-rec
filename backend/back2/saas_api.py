@@ -26,7 +26,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Any
-from kafka.producer import emit_event, emit_event_bg, shutdown_producer, get_kafka_status
+from kafka.producer import emit_event, emit_event_bg, shutdown_producer, get_kafka_status, get_recent_events
+import experiment_service as exp_svc
 
 from pydantic import BaseModel
 
@@ -3341,3 +3342,273 @@ async def agent_train_logistics_upload(
         )
         created.append({"id": db_project.id, "domain_slug": domain_slug, "status": str(db_project.status)})
     return {"created": created, "bundle": "logistics_upload"}
+
+
+# =============================================================================
+# Kafka Events Stream (ring-buffer read-only)
+# =============================================================================
+
+@app.get("/kafka/events")
+def get_kafka_events(
+    limit: int = 50,
+    current_user_id: int = Depends(get_current_user_id),
+):
+    """Return the last N events captured in the in-memory ring buffer."""
+    events = get_recent_events(limit=min(int(limit), 100))
+    return {"events": events, "total": len(events)}
+
+
+# =============================================================================
+# Experimentation Service Routes
+# =============================================================================
+
+class ExperimentVariant(BaseModel):
+    id: str
+    label: str
+    weight: int  # must be 0–100; all variants must sum to 100
+
+
+class CreateExperimentRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    project_id: Optional[int] = None
+    variants: List[ExperimentVariant]
+    goal_metric: Optional[str] = None
+
+
+class AssignVariantRequest(BaseModel):
+    bucket_key: str  # user_id or session_id
+
+
+class RecordEventRequest(BaseModel):
+    assignment_id: int
+    event_type: str  # impression | click | conversion | custom
+    value: Optional[float] = None
+    meta: Dict[str, Any] = {}
+
+
+class ConcludeExperimentRequest(BaseModel):
+    winner_variant: Optional[str] = None
+
+
+def _serialize_experiment(exp: models.ExperimentDefinition) -> Dict[str, Any]:
+    return {
+        "id": exp.id,
+        "name": exp.name,
+        "description": exp.description,
+        "project_id": exp.project_id,
+        "variants": json.loads(exp.variants_json or "[]"),
+        "traffic_split": json.loads(exp.traffic_split_json or "{}"),
+        "goal_metric": exp.goal_metric,
+        "status": exp.status,
+        "winner_variant": exp.winner_variant,
+        "created_at": exp.created_at.isoformat() if exp.created_at else None,
+        "started_at": exp.started_at.isoformat() if exp.started_at else None,
+        "concluded_at": exp.concluded_at.isoformat() if exp.concluded_at else None,
+    }
+
+
+@app.post("/experiments")
+def create_experiment(
+    req: CreateExperimentRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Create a new A/B experiment definition."""
+    variants = [{"id": v.id, "label": v.label, "weight": v.weight} for v in req.variants]
+    traffic_split = {v.id: v.weight for v in req.variants}
+    exp = exp_svc.create_experiment(
+        db=db,
+        owner_id=current_user_id,
+        project_id=req.project_id,
+        name=req.name,
+        description=req.description,
+        variants=variants,
+        traffic_split=traffic_split,
+        goal_metric=req.goal_metric,
+    )
+    return _serialize_experiment(exp)
+
+
+@app.get("/experiments")
+def list_experiments(
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """List all experiments owned by (or accessible to) the current user."""
+    if current_user_id == -1:
+        raise HTTPException(status_code=401, detail="Internal key cannot list experiments.")
+    exps = exp_svc.list_experiments(db=db, owner_id=current_user_id)
+    return [_serialize_experiment(e) for e in exps]
+
+
+@app.get("/experiments/{experiment_id}")
+def get_experiment(
+    experiment_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Get experiment definition."""
+    exp = exp_svc.get_experiment(db, experiment_id, current_user_id)
+    return _serialize_experiment(exp)
+
+
+@app.post("/experiments/{experiment_id}/start")
+def start_experiment(
+    experiment_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Transition experiment from draft → running."""
+    exp = exp_svc.start_experiment(db=db, experiment_id=experiment_id, owner_id=current_user_id)
+    return _serialize_experiment(exp)
+
+
+@app.post("/experiments/{experiment_id}/assign")
+def assign_experiment_variant(
+    experiment_id: int,
+    req: AssignVariantRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Deterministically assign a variant to bucket_key.
+    Idempotent: same bucket_key always returns the same variant.
+    """
+    variant, assignment_id = exp_svc.assign_variant(
+        db=db,
+        experiment_id=experiment_id,
+        bucket_key=req.bucket_key,
+        owner_id=current_user_id,
+    )
+    return {"variant": variant, "assignment_id": assignment_id, "bucket_key": req.bucket_key}
+
+
+@app.post("/experiments/{experiment_id}/event")
+def record_experiment_event(
+    experiment_id: int,
+    req: RecordEventRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Record an outcome event (impression/click/conversion) for an assignment."""
+    # Verify assignment belongs to this experiment
+    assignment = db.query(models.ExperimentAssignment).filter(
+        models.ExperimentAssignment.id == req.assignment_id,
+        models.ExperimentAssignment.experiment_id == experiment_id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found for this experiment.")
+    ev = exp_svc.record_event(
+        db=db,
+        assignment_id=req.assignment_id,
+        event_type=req.event_type,
+        value=req.value,
+        meta=req.meta,
+    )
+    return {"event_id": ev.id, "event_type": ev.event_type, "assignment_id": ev.assignment_id}
+
+
+@app.get("/experiments/{experiment_id}/results")
+def get_experiment_results(
+    experiment_id: int,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Aggregated per-variant stats: impressions, clicks, conversions, CTR, CVR, lift."""
+    return exp_svc.get_experiment_results(db=db, experiment_id=experiment_id, owner_id=current_user_id)
+
+
+@app.post("/experiments/{experiment_id}/conclude")
+def conclude_experiment(
+    experiment_id: int,
+    req: ConcludeExperimentRequest,
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """Close the experiment, optionally recording a winner."""
+    exp = exp_svc.conclude_experiment(
+        db=db,
+        experiment_id=experiment_id,
+        owner_id=current_user_id,
+        winner_variant=req.winner_variant,
+    )
+    return _serialize_experiment(exp)
+
+
+# =============================================================================
+# System Operational Metrics Endpoint
+# =============================================================================
+
+@app.get("/system/metrics")
+def system_operational_metrics(
+    current_user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db),
+):
+    """
+    Unified operational metrics for the admin dashboard:
+    - project counts and status breakdown
+    - model registry summary
+    - serving controls summary
+    - kafka status
+    - experiment counts
+    """
+    # Projects
+    from sqlalchemy import or_, func as sqlfunc
+    all_projects = db.query(models.RecommenderProject).filter(
+        or_(
+            models.RecommenderProject.owner_id == current_user_id,
+            models.RecommenderProject.owner_id.is_(None),
+            models.RecommenderProject.owner_id == 0,
+        ) if current_user_id != -1 else True
+    ).all()
+
+    status_counts: Dict[str, int] = {}
+    for p in all_projects:
+        s = str(p.status)
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    # Model registry
+    champion_count = db.query(models.ModelRegistryEntry).filter(
+        models.ModelRegistryEntry.role == models.ModelRegistryRole.CHAMPION.value,
+        models.ModelRegistryEntry.retired_at.is_(None),
+    ).count()
+    challenger_count = db.query(models.ModelRegistryEntry).filter(
+        models.ModelRegistryEntry.role == models.ModelRegistryRole.CHALLENGER.value,
+        models.ModelRegistryEntry.retired_at.is_(None),
+    ).count()
+
+    # Experiments
+    exp_counts: Dict[str, int] = {}
+    if current_user_id != -1:
+        exps = exp_svc.list_experiments(db=db, owner_id=current_user_id)
+        for e in exps:
+            s = str(e.status)
+            exp_counts[s] = exp_counts.get(s, 0) + 1
+
+    # Kafka
+    kafka = get_kafka_status()
+
+    return {
+        "projects": {
+            "total": len(all_projects),
+            "by_status": status_counts,
+        },
+        "model_registry": {
+            "champions": champion_count,
+            "challengers": challenger_count,
+        },
+        "experiments": {
+            "total": sum(exp_counts.values()),
+            "by_status": exp_counts,
+        },
+        "kafka": {
+            "enabled": kafka.get("enabled"),
+            "producer_initialized": kafka.get("producer_initialized"),
+            "circuit_breaker_open": kafka.get("circuit_breaker_open"),
+            "total_success": kafka.get("total_success"),
+            "total_failures": kafka.get("total_failures"),
+            "last_success_at": kafka.get("last_success_at"),
+            "last_error": kafka.get("last_error"),
+        },
+    }
